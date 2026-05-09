@@ -20,14 +20,16 @@ import shutil
 import zipfile
 from dataclasses import dataclass
 from enum import Enum, auto
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import NamedTuple
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+SCRIPT_DIR: Path = Path(__file__).parent
 DOWNLOADS: Path = Path(r"C:\Users\dorfm\Downloads")
 LIBRARY_ROOT: Path = Path(r"G:\3-D Printing\1 - Objects")
+LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
 
 PRINT_EXTENSIONS: frozenset[str] = frozenset({
     ".stl", ".3mf", ".obj", ".step", ".stp",
@@ -651,8 +653,38 @@ def print_plan(
 # Entry point
 # ---------------------------------------------------------------------------
 
+
+def _setup_logging() -> None:
+    """Configure root logger with a console handler and a 5 MB rotating file handler.
+
+    The file rotates at 5 MB and keeps one backup (up to 10 MB total on disk).
+    Both handlers share the same timestamped format; the console uses a shorter
+    format to stay readable in terminal output.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return  # Already configured (e.g. called twice)
+    root.setLevel(logging.INFO)
+
+    file_fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s %(message)s")
+    console_fmt = logging.Formatter("%(levelname)s %(message)s")
+
+    fh = RotatingFileHandler(
+        LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=1, encoding="utf-8"
+    )
+    fh.setFormatter(file_fmt)
+    root.addHandler(fh)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(console_fmt)
+    root.addHandler(sh)
+
+
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     """Entry point: parse arguments, run all five phases in dry-run or execute mode."""
+    _setup_logging()
     parser = argparse.ArgumentParser(
         description="Move 3D print files from Downloads into the library."
     )

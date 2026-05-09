@@ -14,12 +14,14 @@ Dependencies:
 """
 
 import json
+import logging
 import subprocess
 import sys
 import threading
 import tkinter as tk
 import winreg
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import ttk
 from typing import Any
@@ -27,9 +29,12 @@ from typing import Any
 import pystray
 from PIL import Image, ImageDraw
 
+logger = logging.getLogger(__name__)
+
 SCRIPT_DIR: Path = Path(__file__).parent
 SCRIPT_PATH: Path = SCRIPT_DIR / "sort_downloads.py"
 CONFIG_PATH: Path = SCRIPT_DIR / "sort_downloads_config.json"
+LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -37,6 +42,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 60,
     "autostart": False,
 }
+
+
+def _setup_logging() -> None:
+    """Configure root logger with a console handler and a 5 MB rotating file handler.
+
+    Shared log file with sort_downloads.py (``sort_downloads.log``).  Rotates at
+    5 MB, keeps one backup — up to 10 MB on disk.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    root.setLevel(logging.INFO)
+
+    file_fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s %(message)s")
+    console_fmt = logging.Formatter("%(levelname)s %(message)s")
+
+    fh = RotatingFileHandler(
+        LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=1, encoding="utf-8"
+    )
+    fh.setFormatter(file_fmt)
+    root.addHandler(fh)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(console_fmt)
+    root.addHandler(sh)
 
 
 def load_config() -> dict[str, Any]:
@@ -101,7 +131,9 @@ class SyncApp:
 
     def __init__(self) -> None:
         """Initialise config, tkinter root, control window, and tray icon."""
+        _setup_logging()
         self._config = load_config()
+        logger.info("sort_downloads_app starting (interval=%d min)", self._config["interval_minutes"])
         self._timer: threading.Timer | None = None
         self._running: bool = False
         self._last_run: datetime | None = None
@@ -273,6 +305,7 @@ class SyncApp:
         if self._running:
             return
         self._running = True
+        logger.info("Scheduler started (interval=%d min)", self._config["interval_minutes"])
         self._schedule_next()
         self._update_tray_icon()
         self._refresh_labels()
@@ -284,6 +317,7 @@ class SyncApp:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+        logger.info("Scheduler stopped")
         self._update_tray_icon()
         self.root.after(0, self._refresh_labels)
 
@@ -303,15 +337,26 @@ class SyncApp:
 
     def _run_sync(self) -> None:
         """Run sort_downloads.py --move as a subprocess and record the timestamp."""
+        logger.info("Sync run starting")
         self.root.after(0, lambda: self._status_var.set("Running"))
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, str(SCRIPT_PATH), "--move"],
                 capture_output=True,
                 check=False,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
+            if result.returncode != 0:
+                logger.warning("Sync exited with code %d", result.returncode)
+                if result.stderr:
+                    logger.warning("stderr: %s", result.stderr.strip())
+        except OSError as exc:
+            logger.error("Failed to launch sync subprocess: %s", exc)
         finally:
             self._last_run = datetime.now()
+            logger.info("Sync run finished")
             self.root.after(0, self._refresh_labels)
             if not self._running:
                 self.root.after(0, lambda: self._status_var.set("Idle"))
@@ -344,6 +389,7 @@ class SyncApp:
 
     def on_exit(self) -> None:
         """Cleanly stop the scheduler, remove the tray icon, and quit."""
+        logger.info("sort_downloads_app exiting")
         self._running = False
         if self._timer is not None:
             self._timer.cancel()
@@ -383,8 +429,7 @@ def toggle_autostart(enabled: bool) -> None:
                 except FileNotFoundError:
                     pass
     except OSError as exc:
-        import logging
-        logging.getLogger(__name__).error("Registry operation failed: %s", exc)
+        logger.error("Registry operation failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
