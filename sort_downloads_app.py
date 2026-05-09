@@ -13,6 +13,7 @@ Dependencies:
     pip install pystray Pillow
 """
 
+import ctypes
 import json
 import logging
 import subprocess
@@ -221,11 +222,11 @@ class SyncApp:
         tk.Label(
             header, text="3D Print Library Sync",
             bg=CLR_PURPLE, fg=CLR_WHITE,
-            font=("Segoe UI", 14, "bold"), pady=20,
+            font=("Segoe UI", 14, "bold"), pady=40,
         ).pack()
 
         # ── body ─────────────────────────────────────────────────────────────
-        body = ttb.Frame(self.root, padding=(28, 20))
+        body = ttb.Frame(self.root, padding=(56, 40))
         body.pack(fill="both", expand=True)
 
         # Status section
@@ -241,15 +242,15 @@ class SyncApp:
             ("Next run:", self._next_run_var),
         ]):
             ttb.Label(status_frame, text=label_text, width=10, anchor="w").grid(
-                row=i, column=0, sticky="w", pady=6)
+                row=i, column=0, sticky="w", pady=12)
             ttb.Label(status_frame, textvariable=var, bootstyle="secondary",  # type: ignore[call-arg]
-                      anchor="w").grid(row=i, column=1, sticky="w", pady=6)
+                      anchor="w").grid(row=i, column=1, sticky="w", pady=12)
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
 
         # Interval
         interval_row = ttb.Frame(body)
-        interval_row.pack(fill="x", pady=(0, 4))
+        interval_row.pack(fill="x", pady=(0, 8))
         ttb.Label(interval_row, text="Interval:").pack(side="left")
         self._interval_var = tk.IntVar(value=self._config["interval_minutes"])
         spinbox = ttb.Spinbox(
@@ -257,24 +258,24 @@ class SyncApp:
             textvariable=self._interval_var, command=self._on_interval_change,
             bootstyle="primary",  # type: ignore[call-arg]
         )
-        spinbox.pack(side="left", padx=12)
+        spinbox.pack(side="left", padx=24)
         spinbox.bind("<FocusOut>", lambda _e: self._on_interval_change())
         spinbox.bind("<Return>", lambda _e: self._on_interval_change())
         ttb.Label(interval_row, text="minutes").pack(side="left")
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
 
         # Start / Stop
         row1 = ttb.Frame(body)
-        row1.pack(fill="x", pady=(0, 10))
+        row1.pack(fill="x", pady=(0, 20))
         self._start_btn = ttb.Button(
             row1, text="Start", bootstyle="primary",  # type: ignore[call-arg]
-            padding=(16, 8), command=self.start,
+            padding=(32, 16), command=self.start,
         )
-        self._start_btn.pack(side="left", padx=(0, 10))
+        self._start_btn.pack(side="left", padx=(0, 20))
         self._stop_btn = ttb.Button(
             row1, text="Stop", bootstyle="secondary",  # type: ignore[call-arg]
-            padding=(16, 8), command=self.stop, state="disabled",
+            padding=(32, 16), command=self.stop, state="disabled",
         )
         self._stop_btn.pack(side="left")
 
@@ -283,14 +284,14 @@ class SyncApp:
         row2.pack(fill="x")
         ttb.Button(
             row2, text="Run Now", bootstyle="primary",  # type: ignore[call-arg]
-            padding=(16, 8), command=self._on_run_now,
-        ).pack(side="left", padx=(0, 10))
+            padding=(32, 16), command=self._on_run_now,
+        ).pack(side="left", padx=(0, 20))
         ttb.Button(
             row2, text="Open Logs", bootstyle="info",  # type: ignore[call-arg]
-            padding=(16, 8), command=self._on_open_logs,
+            padding=(32, 16), command=self._on_open_logs,
         ).pack(side="left")
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
 
         # Footer: toggle + Exit
         footer = ttb.Frame(body)
@@ -303,7 +304,7 @@ class SyncApp:
         ).pack(side="left")
         ttb.Button(
             footer, text="Exit", bootstyle="secondary",  # type: ignore[call-arg]
-            padding=(16, 8), command=self.on_exit,
+            padding=(32, 16), command=self.on_exit,
         ).pack(side="right")
 
     def _show_window(self) -> None:
@@ -531,5 +532,14 @@ def toggle_autostart(enabled: bool) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Named mutex prevents a second instance from launching.
+    # The handle must stay alive for the lifetime of the process.
+    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\3DPrintSync")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        ctypes.windll.user32.MessageBoxW(
+            0, "3D Print Sync is already running.", "Already Running", 0x40
+        )
+        sys.exit(0)
+
     app = SyncApp()
     app.root.mainloop()
