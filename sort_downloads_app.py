@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,7 @@ SCRIPT_DIR: Path = Path(__file__).parent
 SCRIPT_PATH: Path = SCRIPT_DIR / "sort_downloads.py"
 CONFIG_PATH: Path = SCRIPT_DIR / "sort_downloads_config.json"
 LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
-ICON_TRAY: Path = SCRIPT_DIR / "icons8-3d-printer-comic-32.png"
-ICON_WINDOW: Path = SCRIPT_DIR / "icons8-3d-printer-comic-96.png"
+ICON_SRC: Path = SCRIPT_DIR / "icons8-3d-printer-100.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -155,19 +154,19 @@ def _make_icon_image(running: bool) -> Image.Image:
     """
     dot_colour = (40, 167, 69, 255) if running else (108, 117, 125, 220)
 
-    if ICON_TRAY.exists():
-        img = Image.open(ICON_TRAY).convert("RGBA")
-        w, h = img.size
-        r = max(3, w // 8)
-        draw = ImageDraw.Draw(img)
-        draw.ellipse([w - r * 2 - 1, h - r * 2 - 1, w - 1, h - 1],
-                     fill=dot_colour, outline=(255, 255, 255, 180))
-        return img
+    if ICON_SRC.exists():
+        src = Image.open(ICON_SRC).convert("RGBA")
+        bg = Image.new("RGBA", src.size, (255, 255, 255, 255))
+        bg.paste(src, mask=src.split()[3])
+        img = bg.resize((32, 32), Image.Resampling.LANCZOS)
+    else:
+        img = Image.new("RGBA", (32, 32), (255, 255, 255, 255))
 
-    # Fallback: plain circle
-    img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    w, h = img.size
+    r = max(3, w // 8)
     draw = ImageDraw.Draw(img)
-    draw.ellipse([2, 2, 30, 30], fill=dot_colour)
+    draw.ellipse([w - r * 2 - 1, h - r * 2 - 1, w - 1, h - 1],
+                 fill=dot_colour, outline=(180, 180, 180, 200))
     return img
 
 
@@ -200,9 +199,12 @@ class SyncApp:
         self.root.title("3D Print Library Sync")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._hide_window)
-        icon_path = ICON_WINDOW if ICON_WINDOW.exists() else ICON_TRAY
-        if icon_path.exists():
-            self.root.iconphoto(True, tk.PhotoImage(file=str(icon_path)))
+        if ICON_SRC.exists():
+            src = Image.open(ICON_SRC).convert("RGBA")
+            bg = Image.new("RGBA", src.size, (255, 255, 255, 255))
+            bg.paste(src, mask=src.split()[3])
+            self._window_icon = ImageTk.PhotoImage(bg)
+            self.root.iconphoto(True, self._window_icon)  # type: ignore[arg-type]
         self.root.withdraw()
 
         self._build_window()
