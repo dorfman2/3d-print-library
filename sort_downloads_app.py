@@ -13,6 +13,7 @@ Dependencies:
     pip install pystray Pillow
 """
 
+import ctypes
 import json
 import logging
 import subprocess
@@ -524,5 +525,14 @@ def toggle_autostart(enabled: bool) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Must be called before any window is created so Windows renders at native
+    # resolution instead of scaling up a low-DPI surface (which looks pixelated).
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system-DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()   # fallback (Vista+)
+        except Exception:
+            pass
     app = SyncApp()
     app.root.mainloop()
