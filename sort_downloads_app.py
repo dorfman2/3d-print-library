@@ -13,7 +13,6 @@ Dependencies:
     pip install pystray Pillow
 """
 
-import ctypes
 import json
 import logging
 import subprocess
@@ -21,6 +20,8 @@ import sys
 import threading
 import tkinter as tk
 import winreg
+
+import ttkbootstrap as ttb
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -46,6 +47,34 @@ CLR_PEACH: str = "#FFB090"
 CLR_PINK: str = "#CA5995"
 CLR_PURPLE: str = "#5D1C6A"
 CLR_WHITE: str = "#FFFFFF"
+
+# Register custom ttkbootstrap theme using the palette
+try:
+    from ttkbootstrap.themes.standard import STANDARD_THEMES  # type: ignore[import-untyped]
+    STANDARD_THEMES["3dprint"] = {
+        "type": "light",
+        "colors": {
+            "primary": CLR_PURPLE,
+            "secondary": CLR_PINK,
+            "success": "#198754",
+            "info": CLR_PEACH,
+            "warning": "#ffc107",
+            "danger": CLR_PINK,
+            "light": CLR_BG,
+            "dark": CLR_PURPLE,
+            "bg": CLR_BG,
+            "fg": CLR_PURPLE,
+            "selectbg": CLR_PINK,
+            "selectfg": CLR_WHITE,
+            "border": CLR_PEACH,
+            "inputfg": CLR_PURPLE,
+            "inputbg": CLR_WHITE,
+            "active": CLR_PEACH,
+        },
+    }
+    _THEME = "3dprint"
+except Exception:
+    _THEME = "pulse"  # closest built-in fallback
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 60,
@@ -163,8 +192,8 @@ class SyncApp:
         self._last_run: datetime | None = None
         self._next_run: datetime | None = None
 
-        # Tkinter root — kept withdrawn until explicitly shown
-        self.root = tk.Tk()
+        # ttkbootstrap Window handles DPI awareness and theming automatically
+        self.root = ttb.Window(themename=_THEME)
         self.root.title("3D Print Library Sync")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._hide_window)
@@ -185,35 +214,8 @@ class SyncApp:
     # ------------------------------------------------------------------
 
     def _build_window(self) -> None:
-        """Construct and lay out all tkinter widgets using the branded colour palette."""
-        self.root.configure(bg=CLR_BG)
-
-        # ── helpers ──────────────────────────────────────────────────────────
-        def divider(parent: tk.Widget) -> None:
-            tk.Frame(parent, bg=CLR_PEACH, height=1).pack(fill="x", pady=8)
-
-        def mkbtn(
-            parent: tk.Widget,
-            text: str,
-            command: Any,
-            bg: str = CLR_PURPLE,
-            fg: str = CLR_WHITE,
-            active_bg: str = CLR_PINK,
-        ) -> tk.Button:
-            return tk.Button(
-                parent, text=text, command=command,
-                bg=bg, fg=fg,
-                activebackground=active_bg, activeforeground=CLR_WHITE,
-                disabledforeground=CLR_PEACH,
-                relief="flat", bd=0, padx=14, pady=7,
-                font=("Segoe UI", 10), cursor="hand2",
-            )
-
-        def lbl(parent: tk.Widget, text: str, **kw: Any) -> tk.Label:
-            return tk.Label(parent, text=text, bg=CLR_BG, fg=CLR_PURPLE,
-                            font=("Segoe UI", 10), **kw)
-
-        # ── header banner ────────────────────────────────────────────────────
+        """Construct the control window using ttkbootstrap themed widgets."""
+        # ── header banner (plain tk for guaranteed palette colours) ──────────
         header = tk.Frame(self.root, bg=CLR_PURPLE)
         header.pack(fill="x")
         tk.Label(
@@ -223,82 +225,86 @@ class SyncApp:
         ).pack()
 
         # ── body ─────────────────────────────────────────────────────────────
-        body = tk.Frame(self.root, bg=CLR_BG)
-        body.pack(fill="both", expand=True, padx=20, pady=14)
+        body = ttb.Frame(self.root, padding=(20, 14))
+        body.pack(fill="both", expand=True)
 
-        # Status grid
+        # Status section
         self._status_var = tk.StringVar(value="Idle")
         self._last_run_var = tk.StringVar(value="Never")
         self._next_run_var = tk.StringVar(value="Not scheduled")
 
-        status_frame = tk.Frame(body, bg=CLR_BG)
+        status_frame = ttb.Frame(body)
         status_frame.pack(fill="x")
         for i, (label_text, var) in enumerate([
             ("Status:", self._status_var),
             ("Last run:", self._last_run_var),
             ("Next run:", self._next_run_var),
         ]):
-            lbl(status_frame, label_text, width=10, anchor="w").grid(
+            ttb.Label(status_frame, text=label_text, width=10, anchor="w").grid(
                 row=i, column=0, sticky="w", pady=2)
-            tk.Label(
-                status_frame, textvariable=var,
-                bg=CLR_BG, fg=CLR_PINK, font=("Segoe UI", 10), anchor="w",
-            ).grid(row=i, column=1, sticky="w", pady=2)
+            ttb.Label(status_frame, textvariable=var, bootstyle="secondary",  # type: ignore[call-arg]
+                      anchor="w").grid(row=i, column=1, sticky="w", pady=2)
 
-        divider(body)
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
 
         # Interval
-        interval_row = tk.Frame(body, bg=CLR_BG)
+        interval_row = ttb.Frame(body)
         interval_row.pack(fill="x")
-        lbl(interval_row, "Interval:").pack(side="left")
+        ttb.Label(interval_row, text="Interval:").pack(side="left")
         self._interval_var = tk.IntVar(value=self._config["interval_minutes"])
-        spinbox = tk.Spinbox(
+        spinbox = ttb.Spinbox(
             interval_row, from_=1, to=1440, width=5,
             textvariable=self._interval_var, command=self._on_interval_change,
-            bg=CLR_WHITE, fg=CLR_PURPLE, relief="flat",
-            highlightthickness=1, highlightbackground=CLR_PEACH,
-            buttonbackground=CLR_PEACH, insertbackground=CLR_PURPLE,
-            font=("Segoe UI", 10),
+            bootstyle="primary",  # type: ignore[call-arg]
         )
         spinbox.pack(side="left", padx=8)
         spinbox.bind("<FocusOut>", lambda _e: self._on_interval_change())
         spinbox.bind("<Return>", lambda _e: self._on_interval_change())
-        lbl(interval_row, "minutes").pack(side="left")
+        ttb.Label(interval_row, text="minutes").pack(side="left")
 
-        divider(body)
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
 
         # Start / Stop
-        row1 = tk.Frame(body, bg=CLR_BG)
+        row1 = ttb.Frame(body)
         row1.pack(fill="x", pady=(0, 8))
-        self._start_btn = mkbtn(row1, "Start", self.start)
+        self._start_btn = ttb.Button(
+            row1, text="Start", bootstyle="primary",  # type: ignore[call-arg]
+            padding=(10, 6), command=self.start,
+        )
         self._start_btn.pack(side="left", padx=(0, 8))
-        self._stop_btn = mkbtn(row1, "Stop", self.stop, bg=CLR_PINK, active_bg=CLR_PURPLE)
+        self._stop_btn = ttb.Button(
+            row1, text="Stop", bootstyle="secondary",  # type: ignore[call-arg]
+            padding=(10, 6), command=self.stop, state="disabled",
+        )
         self._stop_btn.pack(side="left")
-        self._stop_btn.config(state="disabled")
 
         # Run Now / Open Logs
-        row2 = tk.Frame(body, bg=CLR_BG)
+        row2 = ttb.Frame(body)
         row2.pack(fill="x")
-        mkbtn(row2, "Run Now", self._on_run_now).pack(side="left", padx=(0, 8))
-        mkbtn(
-            row2, "Open Logs", self._on_open_logs,
-            bg=CLR_PEACH, fg=CLR_PURPLE, active_bg=CLR_PINK,
+        ttb.Button(
+            row2, text="Run Now", bootstyle="primary",  # type: ignore[call-arg]
+            padding=(10, 6), command=self._on_run_now,
+        ).pack(side="left", padx=(0, 8))
+        ttb.Button(
+            row2, text="Open Logs", bootstyle="info",  # type: ignore[call-arg]
+            padding=(10, 6), command=self._on_open_logs,
         ).pack(side="left")
 
-        divider(body)
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
 
-        # Footer: Start on Boot + Exit
-        footer = tk.Frame(body, bg=CLR_BG)
+        # Footer: toggle + Exit
+        footer = ttb.Frame(body)
         footer.pack(fill="x")
         self._autostart_var = tk.BooleanVar(value=self._config["autostart"])
-        tk.Checkbutton(
+        ttb.Checkbutton(
             footer, text="Start on Boot",
             variable=self._autostart_var, command=self._on_autostart_toggle,
-            bg=CLR_BG, fg=CLR_PURPLE,
-            activebackground=CLR_BG, activeforeground=CLR_PINK,
-            selectcolor=CLR_WHITE, font=("Segoe UI", 10),
+            bootstyle="secondary-round-toggle",  # type: ignore[call-arg]
         ).pack(side="left")
-        mkbtn(footer, "Exit", self.on_exit, bg=CLR_PINK, active_bg=CLR_PURPLE).pack(side="right")
+        ttb.Button(
+            footer, text="Exit", bootstyle="secondary",  # type: ignore[call-arg]
+            padding=(10, 6), command=self.on_exit,
+        ).pack(side="right")
 
     def _show_window(self) -> None:
         """Raise and deiconify the control window."""
@@ -525,14 +531,5 @@ def toggle_autostart(enabled: bool) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Must be called before any window is created so Windows renders at native
-    # resolution instead of scaling up a low-DPI surface (which looks pixelated).
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # system-DPI aware
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()   # fallback (Vista+)
-        except Exception:
-            pass
     app = SyncApp()
     app.root.mainloop()
