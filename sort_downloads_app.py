@@ -221,11 +221,11 @@ class SyncApp:
         tk.Label(
             header, text="3D Print Library Sync",
             bg=CLR_PURPLE, fg=CLR_WHITE,
-            font=("Segoe UI", 13, "bold"), pady=14,
+            font=("Segoe UI", 14, "bold"), pady=20,
         ).pack()
 
         # ── body ─────────────────────────────────────────────────────────────
-        body = ttb.Frame(self.root, padding=(20, 14))
+        body = ttb.Frame(self.root, padding=(28, 20))
         body.pack(fill="both", expand=True)
 
         # Status section
@@ -241,15 +241,15 @@ class SyncApp:
             ("Next run:", self._next_run_var),
         ]):
             ttb.Label(status_frame, text=label_text, width=10, anchor="w").grid(
-                row=i, column=0, sticky="w", pady=2)
+                row=i, column=0, sticky="w", pady=6)
             ttb.Label(status_frame, textvariable=var, bootstyle="secondary",  # type: ignore[call-arg]
-                      anchor="w").grid(row=i, column=1, sticky="w", pady=2)
+                      anchor="w").grid(row=i, column=1, sticky="w", pady=6)
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
 
         # Interval
         interval_row = ttb.Frame(body)
-        interval_row.pack(fill="x")
+        interval_row.pack(fill="x", pady=(0, 4))
         ttb.Label(interval_row, text="Interval:").pack(side="left")
         self._interval_var = tk.IntVar(value=self._config["interval_minutes"])
         spinbox = ttb.Spinbox(
@@ -257,24 +257,24 @@ class SyncApp:
             textvariable=self._interval_var, command=self._on_interval_change,
             bootstyle="primary",  # type: ignore[call-arg]
         )
-        spinbox.pack(side="left", padx=8)
+        spinbox.pack(side="left", padx=12)
         spinbox.bind("<FocusOut>", lambda _e: self._on_interval_change())
         spinbox.bind("<Return>", lambda _e: self._on_interval_change())
         ttb.Label(interval_row, text="minutes").pack(side="left")
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
 
         # Start / Stop
         row1 = ttb.Frame(body)
-        row1.pack(fill="x", pady=(0, 8))
+        row1.pack(fill="x", pady=(0, 10))
         self._start_btn = ttb.Button(
             row1, text="Start", bootstyle="primary",  # type: ignore[call-arg]
-            padding=(10, 6), command=self.start,
+            padding=(16, 8), command=self.start,
         )
-        self._start_btn.pack(side="left", padx=(0, 8))
+        self._start_btn.pack(side="left", padx=(0, 10))
         self._stop_btn = ttb.Button(
             row1, text="Stop", bootstyle="secondary",  # type: ignore[call-arg]
-            padding=(10, 6), command=self.stop, state="disabled",
+            padding=(16, 8), command=self.stop, state="disabled",
         )
         self._stop_btn.pack(side="left")
 
@@ -283,14 +283,14 @@ class SyncApp:
         row2.pack(fill="x")
         ttb.Button(
             row2, text="Run Now", bootstyle="primary",  # type: ignore[call-arg]
-            padding=(10, 6), command=self._on_run_now,
-        ).pack(side="left", padx=(0, 8))
+            padding=(16, 8), command=self._on_run_now,
+        ).pack(side="left", padx=(0, 10))
         ttb.Button(
             row2, text="Open Logs", bootstyle="info",  # type: ignore[call-arg]
-            padding=(10, 6), command=self._on_open_logs,
+            padding=(16, 8), command=self._on_open_logs,
         ).pack(side="left")
 
-        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=8)  # type: ignore[call-arg]
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=14)  # type: ignore[call-arg]
 
         # Footer: toggle + Exit
         footer = ttb.Frame(body)
@@ -303,7 +303,7 @@ class SyncApp:
         ).pack(side="left")
         ttb.Button(
             footer, text="Exit", bootstyle="secondary",  # type: ignore[call-arg]
-            padding=(10, 6), command=self.on_exit,
+            padding=(16, 8), command=self.on_exit,
         ).pack(side="right")
 
     def _show_window(self) -> None:
