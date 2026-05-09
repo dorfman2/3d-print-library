@@ -1,0 +1,17 @@
+﻿# 3D print library files (large binaries, stored on OneDrive)
+1 - Objects/
+2 - Configs and Profiles/
+3 - Firmware and Images/
+4 - Timelapses/
+5 - Designer Files/
+
+# Runtime config (user-specific)
+sort_downloads_config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local Claude settings
+.claude/settings.local.json
