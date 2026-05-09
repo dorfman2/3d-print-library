@@ -80,6 +80,7 @@ except Exception:
 DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 60,
     "autostart": False,
+    "last_run": None,
 }
 
 
@@ -190,7 +191,8 @@ class SyncApp:
         logger.info("sort_downloads_app starting (interval=%d min)", self._config["interval_minutes"])
         self._timer: threading.Timer | None = None
         self._running: bool = False
-        self._last_run: datetime | None = None
+        raw = self._config.get("last_run")
+        self._last_run: datetime | None = datetime.fromisoformat(raw) if raw else None
         self._next_run: datetime | None = None
 
         # ttkbootstrap Window handles DPI awareness and theming automatically
@@ -439,6 +441,8 @@ class SyncApp:
             logger.error("Failed to launch sync subprocess: %s", exc)
         finally:
             self._last_run = datetime.now()
+            self._config["last_run"] = self._last_run.isoformat()
+            save_config(self._config)
             logger.info("Sync run finished")
             self.root.after(0, self._refresh_labels)
             if not self._running:
