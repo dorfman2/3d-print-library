@@ -158,3 +158,77 @@ The following keywords are missing from the current implementation and must be a
 - Renaming files inside a project folder (only the project folder itself is renamed).
 - Moving files between library categories (re-categorisation of existing library items).
 - Handling password-protected ZIPs.
+
+---
+
+## Sync App (`sort_downloads_app.py`)
+
+A lightweight Windows system-tray application that runs `sort_downloads.py --move`
+on a configurable schedule and provides basic start/stop/boot controls.
+
+### Dependencies
+
+```
+pip install pystray Pillow
+```
+
+### Config File
+
+`sort_downloads_config.json` (created alongside the script on first run):
+
+```json
+{ "interval_minutes": 60, "autostart": false }
+```
+
+### System Tray Icon
+
+Right-click menu:
+
+| Item | Action |
+|------|--------|
+| Show Window | Raise / un-minimise the control window |
+| Run Now | Execute sync immediately (outside schedule) |
+| ────── | Separator |
+| Exit | Cancel timer, remove tray icon, quit |
+
+Icon colour: green when scheduled/running, grey when stopped.
+
+### Control Window (~300 × 240 px)
+
+```
++--------------------------------+
+| 3D Print Library Sync          |
++--------------------------------+
+| Status:   Idle                 |
+| Last run: Never                |
+| Next run: Not scheduled        |
+|                                |
+| Interval: [60 v] minutes       |
+|                                |
+| [  Start  ]  [  Stop  ]        |
+| [x] Start on Boot              |
+|          [ Exit ]              |
++--------------------------------+
+```
+
+- **Status** — `Idle` / `Running` / `Scheduled`
+- **Last run** — timestamp of most recent completed sync, or `Never`
+- **Next run** — timestamp of next scheduled sync, or `Not scheduled`
+- **Interval spinbox** — range 1–1440 minutes; saved to config on change
+- **Start / Stop** — enable or cancel the recurring timer
+- **Start on Boot checkbox** — writes/removes a Windows Registry autostart entry
+- **Exit button** — same as tray Exit
+
+### Boot Behaviour
+
+When launched with `--minimized` (used by the registry entry), the window is
+hidden on startup; only the tray icon appears.
+
+### Registry Key
+
+```
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+  3DPrintSync = "C:\...\pythonw.exe" "G:\3-D Printing\sort_downloads_app.py" --minimized
+```
+
+`pythonw.exe` is used so no console window appears on login.

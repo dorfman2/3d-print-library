@@ -1,13 +1,16 @@
 """
 sort_downloads.py - Move 3D print files from Downloads into the organized library.
 
-Scans the Downloads folder for project folders, loose print files, and ZIPs
-containing print files. Categorizes each via keyword matching and moves them
-into the appropriate category subfolder under the library.
+Implements five phases:
+  1. Pre-process Downloads ZIPs — collapse ZIP + extracted-folder duplicates.
+  2. Build library index — collect cleaned names of all existing library projects.
+  3. Collect and categorise candidates — identify items to move, skip duplicates.
+  4. Move to library — execute moves and log results.
+  5. Clean library ZIPs — extract and remove any ZIPs that landed in the library.
 
 Usage:
-    python sort_downloads.py           # Dry run: preview moves, no changes made
-    python sort_downloads.py --move    # Execute moves
+    python sort_downloads.py           # Dry run: preview all phases, no changes
+    python sort_downloads.py --move    # Execute all phases
 """
 
 import argparse
@@ -18,6 +21,7 @@ import zipfile
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
+from typing import NamedTuple
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +53,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "kitchen", "bathroom", "planter", "vase", "hook",
         "curtain", "shelf", "door", "toilet", "soap", "toothbrush",
         "towel", "cabinet", "drawer", "furniture",
+        "musubi", "sushi", "press", "food", "bento",
     ],
     "3 - Office": [
         "desk", "monitor", "keyboard", "phone stand", "cable",
@@ -68,6 +73,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "raspberry pi", "arduino", "esp32", "esp8266",
         "electronics", "iot", "enclosure", "pcb", "sensor",
         "relay", "wemos", "pi zero", "rpi",
+        "rak", "wisblock", "heltec", "seeed", "meshtastic",
+        "lora", "lorawan", "tracker", "gateway", "t1000", "holster",
     ],
     "7 - Gifts and Toys": [
         "gift", "toy", "fidget", "novelty",
@@ -103,17 +110,18 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# Noise suffixes stripped from the end of project names.
-# Uses a single separator char ([\s_-]) rather than \b because _ is a \w char
-# and word boundaries don't fire between _ and letters. The outer (+) lets one
-# pass strip multiple stacked tokens, e.g. _v3_FINAL_STL in one shot.
+# Noise tokens stripped from the end of project names before separator replacement.
+# Uses [\s_-] rather than \b because _ is a \w char — word boundaries don't fire
+# between _ and letters. The outer (+) strips multiple stacked tokens in one pass.
 _NOISE: re.Pattern[str] = re.compile(
     r"(?:[\s_-](?:"
-    r"v\d+(?:[._]\d+)*"           # v1, v2, v1.0, v1_2
-    r"|stl|3mf|obj|step|gcode"    # file-type tags
+    r"v\d+(?:[._]\d+)*"             # v1, v2, v1.0, v1_2
+    r"|stl|3mf|obj|step|gcode"      # file-type tags
+    r"|model[\s_-]?files?"          # model_files, model-files, model files
+    r"|files?"                       # bare _files suffix
     r"|final"
     r"|remix(?:ed|of)?"
-    r"|by[\s_][a-z0-9_]+"         # "by author"
+    r"|by[\s_][a-z0-9_]+"           # "by author"
     r"|print(?:ed|able)?"
     r"|update[d]?|fix(?:ed)?"
     r"|free|paid"
@@ -154,6 +162,20 @@ class Candidate:
     kind: SourceKind
     category: str
     dest: Path
+
+
+class Phase1Action(NamedTuple):
+    """A planned or executed action from Phase 1 (Downloads ZIP pre-processing).
+
+    Attributes:
+        action: ``'DELETE-ZIP'`` or ``'EXTRACT'``.
+        zip_path: Path to the ZIP file.
+        folder_path: Stem folder that exists (DELETE-ZIP) or will be created (EXTRACT).
+    """
+
+    action: str
+    zip_path: Path
+    folder_path: Path
 
 
 def has_print_files(path: Path) -> bool:
@@ -219,9 +241,10 @@ def clean_name(name: str) -> str:
     """Return a human-readable version of a raw project name.
 
     Applies these transforms in order:
-    1. Replace ``_`` and ``-`` with spaces.
-    2. Strip trailing noise tokens (version numbers, file-type tags, "final",
-       "remix", etc.) in a loop until stable.
+    1. Strip trailing noise tokens (version numbers, file-type tags, ``final``,
+       ``remix``, ``model_files``, etc.) before replacing separators — so patterns
+       like ``v1_2`` are matched before ``_`` becomes a space.
+    2. Replace ``_`` and ``-`` with spaces.
     3. Collapse repeated whitespace.
     4. Title-case each word that is fully lowercase, leaving mixed-case words
        (e.g. ``3DBenchy``, ``RPi``) and acronyms (e.g. ``NERF``) untouched.
@@ -236,12 +259,11 @@ def clean_name(name: str) -> str:
     Examples:
         >>> clean_name("Ender_3_Fan_Duct_v3_FINAL_STL")
         'Ender 3 Fan Duct'
-        >>> clean_name("basic_stringing_test")
-        'Basic Stringing Test'
+        >>> clean_name("case-for-rak-wisblock-1-watt-starter-kit-model_files")
+        'Case for Rak Wisblock 1 Watt Starter Kit'
         >>> clean_name("3DBenchy")
         '3DBenchy'
     """
-    # Strip noise before replacing separators so patterns like v1_2 still match
     s = name
     prev: str | None = None
     while prev != s:
@@ -304,17 +326,136 @@ def zip_project_name(zip_path: Path) -> str:
     return zip_path.stem
 
 
-def collect(downloads: Path) -> list[Candidate]:
-    """Scan *downloads* and return all categorised 3D print candidates.
+def extract_zip_flat(zip_path: Path, dest_dir: Path) -> None:
+    """Extract a ZIP into *dest_dir* / zip_path.stem, stripping any common root.
 
-    Identifies project folders, loose print files, and ZIPs containing print
-    files. Each candidate is assigned a category and a unique destination path.
+    If all ZIP members share a single top-level directory, that prefix is
+    stripped and files land directly in *dest_dir* / zip_path.stem.  Otherwise
+    the ZIP is extracted as-is into that folder.  Existing files are skipped.
+
+    Args:
+        zip_path: Path to the source ZIP archive.
+        dest_dir: Directory that will contain the new project subfolder.
+    """
+    target = dest_dir / zip_path.stem
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        members = zf.namelist()
+        top_dirs = {Path(m).parts[0] for m in members if m}
+        if len(top_dirs) == 1:
+            prefix = top_dirs.pop() + "/"
+            for member in members:
+                if member.startswith(prefix) and not member.endswith("/"):
+                    rel = member[len(prefix):]
+                    if not rel:
+                        continue
+                    out = target / rel
+                    if out.exists():
+                        continue
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src, open(out, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        else:
+            for member in members:
+                if member.endswith("/"):
+                    continue
+                out = target / member
+                if out.exists():
+                    continue
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1
+# ---------------------------------------------------------------------------
+
+def preprocess_downloads_zips(downloads: Path, dry_run: bool) -> list[Phase1Action]:
+    """Phase 1 — remove or extract ZIP files in the Downloads root.
+
+    For each ZIP that contains print files:
+    - If a folder with the same stem already exists alongside it → delete ZIP.
+    - Otherwise → extract the ZIP in-place, then delete it.
 
     Args:
         downloads: Path to the Downloads folder.
+        dry_run: When True, log planned actions but make no filesystem changes.
 
     Returns:
-        List of :class:`Candidate` objects, sorted by source name.
+        List of :class:`Phase1Action` describing each ZIP processed.
+    """
+    actions: list[Phase1Action] = []
+    for item in sorted(downloads.iterdir()):
+        if not item.is_file() or item.suffix.lower() not in ZIP_EXTENSIONS:
+            continue
+        if not zip_contains_print_files(item):
+            continue
+        stem_folder = downloads / item.stem
+        if stem_folder.exists():
+            actions.append(Phase1Action("DELETE-ZIP", item, stem_folder))
+            if not dry_run:
+                item.unlink()
+                logger.info("Deleted redundant ZIP: %s", item.name)
+        else:
+            actions.append(Phase1Action("EXTRACT", item, stem_folder))
+            if not dry_run:
+                extract_zip_flat(item, downloads)
+                item.unlink()
+                logger.info("Extracted and removed ZIP: %s", item.name)
+    return actions
+
+
+# ---------------------------------------------------------------------------
+# Phase 2
+# ---------------------------------------------------------------------------
+
+def build_library_index(library: Path) -> set[str]:
+    """Phase 2 — collect cleaned names of all existing library projects.
+
+    Scans ``library/*/*`` (category / project) and returns the cleaned name of
+    every project folder as a set, used for duplicate detection in Phase 3.
+
+    Args:
+        library: Path to the library root (``LIBRARY_ROOT``).
+
+    Returns:
+        Set of cleaned project names already in the library.
+    """
+    index: set[str] = set()
+    if not library.exists():
+        return index
+    for category in library.iterdir():
+        if not category.is_dir():
+            continue
+        for project in category.iterdir():
+            if project.is_dir():
+                index.add(clean_name(project.name))
+    return index
+
+
+# ---------------------------------------------------------------------------
+# Phase 3
+# ---------------------------------------------------------------------------
+
+def collect(
+    downloads: Path,
+    library_index: set[str],
+) -> tuple[list[Candidate], list[str]]:
+    """Phase 3 — scan Downloads and return categorised candidates plus skips.
+
+    Identifies project folders, loose print files, and ZIPs containing print
+    files. Checks each against *library_index* to skip duplicates. Each
+    non-duplicate is assigned a category and a unique destination path.
+
+    Args:
+        downloads: Path to the Downloads folder.
+        library_index: Set of cleaned names already in the library (Phase 2).
+
+    Returns:
+        A tuple of (candidates, skipped_names) where *candidates* is a list of
+        :class:`Candidate` objects sorted by source name and *skipped_names* is
+        a list of raw source names that were already in the library.
 
     Raises:
         FileNotFoundError: If *downloads* does not exist.
@@ -323,48 +464,60 @@ def collect(downloads: Path) -> list[Candidate]:
         raise FileNotFoundError("Downloads folder not found: %s" % downloads)
 
     candidates: list[Candidate] = []
+    skipped: list[str] = []
 
     for item in sorted(downloads.iterdir()):
         if item.is_dir():
             if has_print_files(item):
-                _add_candidate(candidates, item, item.name, SourceKind.FOLDER)
+                _add_candidate(candidates, skipped, item, item.name, SourceKind.FOLDER, library_index)
         elif item.is_file():
             suffix = item.suffix.lower()
             if suffix in PRINT_EXTENSIONS:
-                _add_candidate(candidates, item, item.stem, SourceKind.LOOSE_FILE)
+                _add_candidate(candidates, skipped, item, item.stem, SourceKind.LOOSE_FILE, library_index)
             elif suffix in ZIP_EXTENSIONS and zip_contains_print_files(item):
                 name = zip_project_name(item)
-                _add_candidate(candidates, item, name, SourceKind.ZIP)
+                _add_candidate(candidates, skipped, item, name, SourceKind.ZIP, library_index)
 
-    return candidates
+    return candidates, skipped
 
 
 def _add_candidate(
     candidates: list[Candidate],
+    skipped: list[str],
     source: Path,
     name: str,
     kind: SourceKind,
+    library_index: set[str],
 ) -> None:
-    """Build a Candidate and append it to *candidates*.
+    """Build a Candidate or record a skip, then append to the appropriate list.
 
     Args:
-        candidates: List to append to.
+        candidates: List to append non-duplicate candidates to.
+        skipped: List to append duplicate source names to.
         source: Original path.
         name: Raw project name for keyword matching.
         kind: Source type.
+        library_index: Set of cleaned names already in the library.
     """
-    category = categorize(name)
     cleaned = clean_name(name)
+    if cleaned in library_index:
+        skipped.append(name)
+        return
+    category = categorize(name)
     dest = unique_dest(LIBRARY_ROOT / category / cleaned)
     candidates.append(Candidate(source=source, name=name, clean=cleaned, kind=kind, category=category, dest=dest))
 
 
+# ---------------------------------------------------------------------------
+# Phase 4
+# ---------------------------------------------------------------------------
+
 def execute_move(candidate: Candidate) -> None:
-    """Move a single candidate into the library.
+    """Phase 4 — move a single candidate into the library.
 
     - FOLDER: moves the whole directory.
     - LOOSE_FILE: creates a named subfolder and moves the file into it.
-    - ZIP: extracts into the destination folder then deletes the ZIP.
+    - ZIP: extracts into the destination folder, then deletes the ZIP.
 
     Args:
         candidate: The candidate to move.
@@ -384,7 +537,6 @@ def execute_move(candidate: Candidate) -> None:
     elif candidate.kind == SourceKind.ZIP:
         candidate.dest.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(candidate.source, "r") as zf:
-            # Strip the common top-level folder if one exists
             members = zf.namelist()
             top_dirs = {Path(m).parts[0] for m in members if m}
             if len(top_dirs) == 1:
@@ -404,28 +556,103 @@ def execute_move(candidate: Candidate) -> None:
     logger.info("Moved '%s'  ->  %s / %s", candidate.source.name, candidate.category, candidate.clean)
 
 
-def print_plan(candidates: list[Candidate]) -> None:
-    """Print a dry-run summary table showing name cleanup and destination.
+# ---------------------------------------------------------------------------
+# Phase 5
+# ---------------------------------------------------------------------------
+
+def clean_library_zips(library: Path, dry_run: bool) -> list[Path]:
+    """Phase 5 — extract and remove all ZIP files remaining in the library tree.
+
+    For each ZIP found under *library* that contains print files: extract its
+    contents into the ZIP's parent directory (skipping files that already exist),
+    then delete the ZIP.
 
     Args:
-        candidates: Candidates that would be moved.
-    """
-    if not candidates:
-        print("Nothing to move — no 3D print files found in Downloads.")
-        return
+        library: Path to the library root (``LIBRARY_ROOT``).
+        dry_run: When True, log planned actions but make no filesystem changes.
 
-    print(f"\nFound {len(candidates)} item(s) to move:\n")
-    name_col = max(len(c.name) for c in candidates)
-    clean_col = max(len(c.clean) for c in candidates)
-    for c in candidates:
-        tag = "[ZIP]" if c.kind == SourceKind.ZIP else "[DIR]" if c.kind == SourceKind.FOLDER else "[FILE]"
-        renamed = f"{c.name:<{name_col}}  ->  {c.clean:<{clean_col}}" if c.name != c.clean else f"{c.name:<{name_col}}     {'':>{clean_col}}"
-        print(f"  {tag} {renamed}  [{c.category}]")
+    Returns:
+        List of ZIP paths that were (or would be) processed.
+    """
+    found: list[Path] = []
+    for zip_path in sorted(library.rglob("*.zip")):
+        if not zip_contains_print_files(zip_path):
+            continue
+        found.append(zip_path)
+        if not dry_run:
+            extract_zip_flat(zip_path, zip_path.parent)
+            zip_path.unlink()
+            logger.info("Extracted library ZIP: %s", zip_path)
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Dry-run output
+# ---------------------------------------------------------------------------
+
+def print_plan(
+    phase1_actions: list[Phase1Action],
+    candidates: list[Candidate],
+    skipped: list[str],
+    lib_zips: list[Path],
+) -> None:
+    """Print a structured dry-run summary of all five phases.
+
+    Args:
+        phase1_actions: Actions planned for Phase 1 (Downloads ZIP cleanup).
+        candidates: Items that would be moved to the library (Phase 3).
+        skipped: Raw names skipped as duplicates (Phase 3).
+        lib_zips: Library ZIPs that would be extracted (Phase 5).
+    """
+    # Phase 1
+    print("\n=== Phase 1: Downloads ZIPs ===")
+    if phase1_actions:
+        for act in phase1_actions:
+            if act.action == "DELETE-ZIP":
+                print(f"  [DELETE-ZIP] {act.zip_path.name}  (folder already extracted)")
+            else:
+                print(f"  [EXTRACT]    {act.zip_path.name}  ->  {act.folder_path.name}/")
+    else:
+        print("  (no print ZIPs found in Downloads)")
+
+    # Phase 3
+    print("\n=== Phase 3: Import to Library ===")
+    if not candidates and not skipped:
+        print("  (nothing to import)")
+    else:
+        name_col = max(
+            (len(c.name) for c in candidates),
+            default=0,
+        )
+        name_col = max(name_col, *(len(s) for s in skipped), 0)
+        for name in skipped:
+            print(f"  [SKIP-DUP]  {name:<{name_col}}  (already in library)")
+        for c in candidates:
+            tag = "[DIR] " if c.kind == SourceKind.FOLDER else "[FILE]" if c.kind == SourceKind.LOOSE_FILE else "[ZIP] "
+            arrow = f"-> {c.clean}" if c.name != c.clean else ""
+            print(f"  {tag}  {c.name:<{name_col}}  {arrow}  [{c.category}]")
+
+    # Phase 5
+    print("\n=== Phase 5: Library ZIP Cleanup ===")
+    if lib_zips:
+        for zp in lib_zips:
+            try:
+                rel = zp.relative_to(LIBRARY_ROOT.parent)
+            except ValueError:
+                rel = zp
+            print(f"  [ZIP] {rel}")
+    else:
+        print("  (no ZIPs in library)")
+
     print("\nRun with --move to execute.\n")
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
-    """Entry point: parse arguments, collect candidates, dry-run or move."""
+    """Entry point: parse arguments, run all five phases in dry-run or execute mode."""
     parser = argparse.ArgumentParser(
         description="Move 3D print files from Downloads into the library."
     )
@@ -435,27 +662,43 @@ def main() -> None:
         help="Execute moves (default is dry run).",
     )
     args = parser.parse_args()
+    dry_run = not args.move
 
-    candidates = collect(DOWNLOADS)
+    # Phase 1
+    phase1_actions = preprocess_downloads_zips(DOWNLOADS, dry_run=dry_run)
 
-    if not args.move:
-        print_plan(candidates)
+    # Phase 2
+    library_index = build_library_index(LIBRARY_ROOT)
+
+    # Phase 3
+    candidates, skipped = collect(DOWNLOADS, library_index)
+
+    # Phase 5 preview (needed for dry-run output regardless of mode)
+    lib_zips = clean_library_zips(LIBRARY_ROOT, dry_run=True)
+
+    if dry_run:
+        print_plan(phase1_actions, candidates, skipped, lib_zips)
         return
 
+    # Phase 4 — execute moves
     if not candidates:
         logger.info("Nothing to move.")
-        return
+    else:
+        errors: list[tuple[Candidate, Exception]] = []
+        for candidate in candidates:
+            try:
+                execute_move(candidate)
+            except OSError as exc:
+                logger.error("Failed to move %s: %s", candidate.name, exc)
+                errors.append((candidate, exc))
+        moved = len(candidates) - len(errors)
+        logger.info("Done: %d moved, %d failed.", moved, len(errors))
 
-    errors: list[tuple[Candidate, Exception]] = []
-    for candidate in candidates:
-        try:
-            execute_move(candidate)
-        except OSError as exc:
-            logger.error("Failed to move %s: %s", candidate.name, exc)
-            errors.append((candidate, exc))
+    for name in skipped:
+        logger.info("Skipped (duplicate): %s", name)
 
-    moved = len(candidates) - len(errors)
-    logger.info("Done: %d moved, %d failed.", moved, len(errors))
+    # Phase 5 — clean library ZIPs
+    clean_library_zips(LIBRARY_ROOT, dry_run=False)
 
 
 if __name__ == "__main__":
