@@ -23,7 +23,6 @@ import winreg
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from tkinter import ttk
 from typing import Any
 
 import pystray
@@ -39,6 +38,13 @@ ICON_TRAY: Path = SCRIPT_DIR / "icons8-3d-printer-comic-32.png"
 ICON_WINDOW: Path = SCRIPT_DIR / "icons8-3d-printer-comic-96.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+# Colour palette
+CLR_BG: str = "#FFF1D3"
+CLR_PEACH: str = "#FFB090"
+CLR_PINK: str = "#CA5995"
+CLR_PURPLE: str = "#5D1C6A"
+CLR_WHITE: str = "#FFFFFF"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 60,
@@ -178,79 +184,120 @@ class SyncApp:
     # ------------------------------------------------------------------
 
     def _build_window(self) -> None:
-        """Construct and lay out all tkinter widgets in the control window."""
-        pad: dict[str, Any] = {"padx": 10, "pady": 4}
+        """Construct and lay out all tkinter widgets using the branded colour palette."""
+        self.root.configure(bg=CLR_BG)
 
-        frame = ttk.Frame(self.root, padding=12)
-        frame.grid(sticky="nsew")
+        # ── helpers ──────────────────────────────────────────────────────────
+        def divider(parent: tk.Widget) -> None:
+            tk.Frame(parent, bg=CLR_PEACH, height=1).pack(fill="x", pady=8)
 
-        ttk.Label(frame, text="3D Print Library Sync", font=("Segoe UI", 11, "bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
-        )
+        def mkbtn(
+            parent: tk.Widget,
+            text: str,
+            command: Any,
+            bg: str = CLR_PURPLE,
+            fg: str = CLR_WHITE,
+            active_bg: str = CLR_PINK,
+        ) -> tk.Button:
+            return tk.Button(
+                parent, text=text, command=command,
+                bg=bg, fg=fg,
+                activebackground=active_bg, activeforeground=CLR_WHITE,
+                disabledforeground=CLR_PEACH,
+                relief="flat", bd=0, padx=14, pady=7,
+                font=("Segoe UI", 10), cursor="hand2",
+            )
 
-        # Status labels
-        ttk.Label(frame, text="Status:").grid(row=1, column=0, sticky="w", **pad)
+        def lbl(parent: tk.Widget, text: str, **kw: Any) -> tk.Label:
+            return tk.Label(parent, text=text, bg=CLR_BG, fg=CLR_PURPLE,
+                            font=("Segoe UI", 10), **kw)
+
+        # ── header banner ────────────────────────────────────────────────────
+        header = tk.Frame(self.root, bg=CLR_PURPLE)
+        header.pack(fill="x")
+        tk.Label(
+            header, text="3D Print Library Sync",
+            bg=CLR_PURPLE, fg=CLR_WHITE,
+            font=("Segoe UI", 13, "bold"), pady=14,
+        ).pack()
+
+        # ── body ─────────────────────────────────────────────────────────────
+        body = tk.Frame(self.root, bg=CLR_BG)
+        body.pack(fill="both", expand=True, padx=20, pady=14)
+
+        # Status grid
         self._status_var = tk.StringVar(value="Idle")
-        ttk.Label(frame, textvariable=self._status_var, width=20).grid(row=1, column=1, columnspan=2, sticky="w")
-
-        ttk.Label(frame, text="Last run:").grid(row=2, column=0, sticky="w", **pad)
         self._last_run_var = tk.StringVar(value="Never")
-        ttk.Label(frame, textvariable=self._last_run_var, width=20).grid(row=2, column=1, columnspan=2, sticky="w")
-
-        ttk.Label(frame, text="Next run:").grid(row=3, column=0, sticky="w", **pad)
         self._next_run_var = tk.StringVar(value="Not scheduled")
-        ttk.Label(frame, textvariable=self._next_run_var, width=20).grid(row=3, column=1, columnspan=2, sticky="w")
 
-        ttk.Separator(frame, orient="horizontal").grid(row=4, column=0, columnspan=3, sticky="ew", pady=6)
+        status_frame = tk.Frame(body, bg=CLR_BG)
+        status_frame.pack(fill="x")
+        for i, (label_text, var) in enumerate([
+            ("Status:", self._status_var),
+            ("Last run:", self._last_run_var),
+            ("Next run:", self._next_run_var),
+        ]):
+            lbl(status_frame, label_text, width=10, anchor="w").grid(
+                row=i, column=0, sticky="w", pady=2)
+            tk.Label(
+                status_frame, textvariable=var,
+                bg=CLR_BG, fg=CLR_PINK, font=("Segoe UI", 10), anchor="w",
+            ).grid(row=i, column=1, sticky="w", pady=2)
+
+        divider(body)
 
         # Interval
-        ttk.Label(frame, text="Interval:").grid(row=5, column=0, sticky="w", **pad)
+        interval_row = tk.Frame(body, bg=CLR_BG)
+        interval_row.pack(fill="x")
+        lbl(interval_row, "Interval:").pack(side="left")
         self._interval_var = tk.IntVar(value=self._config["interval_minutes"])
-        spinbox = ttk.Spinbox(
-            frame,
-            from_=1,
-            to=1440,
-            width=6,
-            textvariable=self._interval_var,
-            command=self._on_interval_change,
+        spinbox = tk.Spinbox(
+            interval_row, from_=1, to=1440, width=5,
+            textvariable=self._interval_var, command=self._on_interval_change,
+            bg=CLR_WHITE, fg=CLR_PURPLE, relief="flat",
+            highlightthickness=1, highlightbackground=CLR_PEACH,
+            buttonbackground=CLR_PEACH, insertbackground=CLR_PURPLE,
+            font=("Segoe UI", 10),
         )
-        spinbox.grid(row=5, column=1, sticky="w", padx=(10, 2), pady=4)
+        spinbox.pack(side="left", padx=8)
         spinbox.bind("<FocusOut>", lambda _e: self._on_interval_change())
         spinbox.bind("<Return>", lambda _e: self._on_interval_change())
-        ttk.Label(frame, text="minutes").grid(row=5, column=2, sticky="w")
+        lbl(interval_row, "minutes").pack(side="left")
 
-        ttk.Separator(frame, orient="horizontal").grid(row=6, column=0, columnspan=3, sticky="ew", pady=6)
+        divider(body)
 
-        # Start / Stop buttons
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=7, column=0, columnspan=3, sticky="ew")
-        self._start_btn = ttk.Button(btn_frame, text="Start", width=10, command=self.start)
-        self._start_btn.pack(side="left", padx=(0, 6))
-        self._stop_btn = ttk.Button(btn_frame, text="Stop", width=10, command=self.stop, state="disabled")
+        # Start / Stop
+        row1 = tk.Frame(body, bg=CLR_BG)
+        row1.pack(fill="x", pady=(0, 8))
+        self._start_btn = mkbtn(row1, "Start", self.start)
+        self._start_btn.pack(side="left", padx=(0, 8))
+        self._stop_btn = mkbtn(row1, "Stop", self.stop, bg=CLR_PINK, active_bg=CLR_PURPLE)
         self._stop_btn.pack(side="left")
-
-        # Autostart checkbox
-        self._autostart_var = tk.BooleanVar(value=self._config["autostart"])
-        ttk.Checkbutton(
-            frame,
-            text="Start on Boot",
-            variable=self._autostart_var,
-            command=self._on_autostart_toggle,
-        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 2))
-
-        ttk.Separator(frame, orient="horizontal").grid(row=9, column=0, columnspan=3, sticky="ew", pady=6)
+        self._stop_btn.config(state="disabled")
 
         # Run Now / Open Logs
-        action_frame = ttk.Frame(frame)
-        action_frame.grid(row=10, column=0, columnspan=3, sticky="ew")
-        ttk.Button(action_frame, text="Run Now", width=10, command=self._on_run_now).pack(side="left", padx=(0, 6))
-        ttk.Button(action_frame, text="Open Logs", width=10, command=self._on_open_logs).pack(side="left")
+        row2 = tk.Frame(body, bg=CLR_BG)
+        row2.pack(fill="x")
+        mkbtn(row2, "Run Now", self._on_run_now).pack(side="left", padx=(0, 8))
+        mkbtn(
+            row2, "Open Logs", self._on_open_logs,
+            bg=CLR_PEACH, fg=CLR_PURPLE, active_bg=CLR_PINK,
+        ).pack(side="left")
 
-        ttk.Separator(frame, orient="horizontal").grid(row=11, column=0, columnspan=3, sticky="ew", pady=6)
+        divider(body)
 
-        ttk.Button(frame, text="Exit", width=10, command=self.on_exit).grid(
-            row=12, column=0, columnspan=3, pady=(0, 4)
-        )
+        # Footer: Start on Boot + Exit
+        footer = tk.Frame(body, bg=CLR_BG)
+        footer.pack(fill="x")
+        self._autostart_var = tk.BooleanVar(value=self._config["autostart"])
+        tk.Checkbutton(
+            footer, text="Start on Boot",
+            variable=self._autostart_var, command=self._on_autostart_toggle,
+            bg=CLR_BG, fg=CLR_PURPLE,
+            activebackground=CLR_BG, activeforeground=CLR_PINK,
+            selectcolor=CLR_WHITE, font=("Segoe UI", 10),
+        ).pack(side="left")
+        mkbtn(footer, "Exit", self.on_exit, bg=CLR_PINK, active_bg=CLR_PURPLE).pack(side="right")
 
     def _show_window(self) -> None:
         """Raise and deiconify the control window."""
