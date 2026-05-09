@@ -240,8 +240,16 @@ class SyncApp:
 
         ttk.Separator(frame, orient="horizontal").grid(row=9, column=0, columnspan=3, sticky="ew", pady=6)
 
+        # Run Now / Open Logs
+        action_frame = ttk.Frame(frame)
+        action_frame.grid(row=10, column=0, columnspan=3, sticky="ew")
+        ttk.Button(action_frame, text="Run Now", width=10, command=self._on_run_now).pack(side="left", padx=(0, 6))
+        ttk.Button(action_frame, text="Open Logs", width=10, command=self._on_open_logs).pack(side="left")
+
+        ttk.Separator(frame, orient="horizontal").grid(row=11, column=0, columnspan=3, sticky="ew", pady=6)
+
         ttk.Button(frame, text="Exit", width=10, command=self.on_exit).grid(
-            row=10, column=0, columnspan=3, pady=(0, 4)
+            row=12, column=0, columnspan=3, pady=(0, 4)
         )
 
     def _show_window(self) -> None:
@@ -402,6 +410,18 @@ class SyncApp:
         self._config["autostart"] = enabled
         save_config(self._config)
         toggle_autostart(enabled)
+
+    def _on_run_now(self) -> None:
+        """Button: run a single sync immediately in a background thread."""
+        threading.Thread(target=self._run_sync, daemon=True).start()
+
+    def _on_open_logs(self) -> None:
+        """Button: open the log file in the default text editor."""
+        import os
+        if LOG_PATH.exists():
+            os.startfile(str(LOG_PATH))
+        else:
+            logger.info("Log file does not exist yet: %s", LOG_PATH)
 
     # ------------------------------------------------------------------
     # Exit
