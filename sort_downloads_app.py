@@ -35,6 +35,8 @@ SCRIPT_DIR: Path = Path(__file__).parent
 SCRIPT_PATH: Path = SCRIPT_DIR / "sort_downloads.py"
 CONFIG_PATH: Path = SCRIPT_DIR / "sort_downloads_config.json"
 LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
+ICON_TRAY: Path = SCRIPT_DIR / "icons8-3d-printer-comic-32.png"
+ICON_WINDOW: Path = SCRIPT_DIR / "icons8-3d-printer-comic-96.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -101,18 +103,33 @@ def save_config(cfg: dict[str, Any]) -> None:
 
 
 def _make_icon_image(running: bool) -> Image.Image:
-    """Create a 64×64 PIL image for the tray icon.
+    """Return a PIL image for the system tray icon.
+
+    Loads the bundled 32×32 PNG when available, then draws a small status dot
+    in the bottom-right corner (green = scheduled/running, grey = idle).
+    Falls back to a plain coloured circle if the PNG is missing.
 
     Args:
-        running: When True the icon is green; grey when stopped.
+        running: When True the status dot is green; grey when stopped.
 
     Returns:
-        RGBA PIL image.
+        RGBA PIL image sized for the system tray.
     """
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    dot_colour = (40, 167, 69, 255) if running else (108, 117, 125, 220)
+
+    if ICON_TRAY.exists():
+        img = Image.open(ICON_TRAY).convert("RGBA")
+        w, h = img.size
+        r = max(3, w // 8)
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([w - r * 2 - 1, h - r * 2 - 1, w - 1, h - 1],
+                     fill=dot_colour, outline=(255, 255, 255, 180))
+        return img
+
+    # Fallback: plain circle
+    img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    colour = (40, 167, 69, 255) if running else (108, 117, 125, 255)
-    draw.ellipse([4, 4, 60, 60], fill=colour)
+    draw.ellipse([2, 2, 30, 30], fill=dot_colour)
     return img
 
 
@@ -144,6 +161,9 @@ class SyncApp:
         self.root.title("3D Print Library Sync")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._hide_window)
+        icon_path = ICON_WINDOW if ICON_WINDOW.exists() else ICON_TRAY
+        if icon_path.exists():
+            self.root.iconphoto(True, tk.PhotoImage(file=str(icon_path)))
         self.root.withdraw()
 
         self._build_window()
