@@ -45,6 +45,8 @@ specification: name-cleanup rules, category keywords, dry-run output format, etc
 
 ## Tray App
 
+![Control window](window-preview.png)
+
 ```powershell
 python sort_downloads_app.py             # open window + tray icon
 python sort_downloads_app.py --minimized # tray icon only (used by autostart)
