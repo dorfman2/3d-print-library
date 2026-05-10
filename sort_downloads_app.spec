@@ -12,12 +12,8 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
-        ("icons8-3d-printer-100.png",      "."),
-        ("icons8-3d-printer.ico",          "."),
-        ("icons8-3d-printer-comic-16.png", "."),
-        ("icons8-3d-printer-comic-32.png", "."),
-        ("icons8-3d-printer-comic-70.png", "."),
-        ("icons8-3d-printer-comic-96.png", "."),
+        ("app-icon-100.png", "."),
+        ("app-icon.ico",     "."),
     ],
     hiddenimports=[
         "sort_downloads",
@@ -53,7 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="icons8-3d-printer.ico",
+    icon="app-icon.ico",
 )
 
 coll = COLLECT(

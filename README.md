@@ -1,8 +1,9 @@
 # 3D Print Library Sync
 
-Automatically moves new 3D print files from `Downloads` into an organised library
-(`G:\3-D Printing\1 - Objects`), with clean folder names, no duplicates, and no
-leftover ZIP files anywhere.
+Automatically moves new 3D print files from a watched **Source folder** (your
+`Downloads` by default) into an organised **Library folder** (`%USERPROFILE%\3D
+Prints` by default) — clean folder names, no duplicates, no leftover ZIPs. Both
+folders are configurable from the tray app's control window.
 
 Two entry points:
 
@@ -50,15 +51,27 @@ python sort_downloads_app.py --minimized # tray icon only (used by autostart)
 ```
 
 The control window lets you:
-- Start / Stop the hourly scheduler (interval 1–1440 minutes)
+- Pick the **Source folder** to watch (defaults to `%USERPROFILE%\Downloads`)
+- Pick the **Library folder** to organise into (defaults to `%USERPROFILE%\3D Prints`,
+  auto-created on first save)
+- Start / Stop the scheduler (interval 1–1440 minutes)
 - Run Now on demand
 - Open Logs
 - Toggle "Start on Boot" (writes/removes a Windows Registry autostart entry)
 - Exit
 
-Config is saved to `sort_downloads_config.json` alongside the scripts.
+Config is saved to `sort_downloads_config.json` alongside the executable.
 
 ---
+
+## Installer (1.0.0)
+
+A pre-built installer ships at `dist\3DPrintSync-Setup.exe`:
+
+- Per-user install to `%LOCALAPPDATA%\3DPrintSync` — no admin / UAC prompt
+- Optional Desktop and Start Menu shortcuts (off by default)
+- Always-present Start Menu **Uninstall** entry, plus an Add/Remove Programs entry
+- Bundles Python and all dependencies — nothing else to install
 
 ## Building the Installer
 
@@ -132,3 +145,12 @@ prints the path to the finished installer.
 | `sort_downloads_requirements.md` | Detailed feature specification |
 | `sort_downloads_config.json` | Runtime config (gitignored) |
 | `sort_downloads.log` | Runtime log — 5 MB rotating (gitignored) |
+| `3d-modeling.png` | Master icon art (source for `app-icon-100.png` / `app-icon.ico`) |
+| `app-icon-100.png` | Tray and window icon (100×100, white-bg composited) |
+| `app-icon.ico` | Multi-size .ico for the .exe, installer, and shortcuts |
+
+---
+
+## Credits
+
+Icon: **"3d-modeling"** by **dickprayuda** (Flaticon).

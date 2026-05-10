@@ -443,6 +443,7 @@ def build_library_index(library: Path) -> set[str]:
 def collect(
     downloads: Path,
     library_index: set[str],
+    library_root: Path,
 ) -> tuple[list[Candidate], list[str]]:
     """Phase 3 — scan Downloads and return categorised candidates plus skips.
 
@@ -453,6 +454,7 @@ def collect(
     Args:
         downloads: Path to the Downloads folder.
         library_index: Set of cleaned names already in the library (Phase 2).
+        library_root: Path to the library root used to build destination paths.
 
     Returns:
         A tuple of (candidates, skipped_names) where *candidates* is a list of
@@ -471,14 +473,14 @@ def collect(
     for item in sorted(downloads.iterdir()):
         if item.is_dir():
             if has_print_files(item):
-                _add_candidate(candidates, skipped, item, item.name, SourceKind.FOLDER, library_index)
+                _add_candidate(candidates, skipped, item, item.name, SourceKind.FOLDER, library_index, library_root)
         elif item.is_file():
             suffix = item.suffix.lower()
             if suffix in PRINT_EXTENSIONS:
-                _add_candidate(candidates, skipped, item, item.stem, SourceKind.LOOSE_FILE, library_index)
+                _add_candidate(candidates, skipped, item, item.stem, SourceKind.LOOSE_FILE, library_index, library_root)
             elif suffix in ZIP_EXTENSIONS and zip_contains_print_files(item):
                 name = zip_project_name(item)
-                _add_candidate(candidates, skipped, item, name, SourceKind.ZIP, library_index)
+                _add_candidate(candidates, skipped, item, name, SourceKind.ZIP, library_index, library_root)
 
     return candidates, skipped
 
@@ -490,6 +492,7 @@ def _add_candidate(
     name: str,
     kind: SourceKind,
     library_index: set[str],
+    library_root: Path,
 ) -> None:
     """Build a Candidate or record a skip, then append to the appropriate list.
 
@@ -500,13 +503,14 @@ def _add_candidate(
         name: Raw project name for keyword matching.
         kind: Source type.
         library_index: Set of cleaned names already in the library.
+        library_root: Path to the library root used to build the destination.
     """
     cleaned = clean_name(name)
     if cleaned in library_index:
         skipped.append(name)
         return
     category = categorize(name)
-    dest = unique_dest(LIBRARY_ROOT / category / cleaned)
+    dest = unique_dest(library_root / category / cleaned)
     candidates.append(Candidate(source=source, name=name, clean=cleaned, kind=kind, category=category, dest=dest))
 
 
@@ -597,6 +601,7 @@ def print_plan(
     candidates: list[Candidate],
     skipped: list[str],
     lib_zips: list[Path],
+    library_root: Path,
 ) -> None:
     """Print a structured dry-run summary of all five phases.
 
@@ -605,6 +610,7 @@ def print_plan(
         candidates: Items that would be moved to the library (Phase 3).
         skipped: Raw names skipped as duplicates (Phase 3).
         lib_zips: Library ZIPs that would be extracted (Phase 5).
+        library_root: Library root path used to render relative ZIP paths.
     """
     # Phase 1
     print("\n=== Phase 1: Downloads ZIPs ===")
@@ -639,7 +645,7 @@ def print_plan(
     if lib_zips:
         for zp in lib_zips:
             try:
-                rel = zp.relative_to(LIBRARY_ROOT.parent)
+                rel = zp.relative_to(library_root.parent)
             except ValueError:
                 rel = zp
             print(f"  [ZIP] {rel}")
@@ -682,7 +688,11 @@ def _setup_logging() -> None:
 
 # ---------------------------------------------------------------------------
 
-def run(move: bool = True) -> None:
+def run(
+    move: bool = True,
+    downloads: Path | None = None,
+    library_root: Path | None = None,
+) -> None:
     """Execute all five phases programmatically.
 
     Called directly by the frozen GUI app (``sort_downloads_app.exe``) so it can
@@ -692,24 +702,30 @@ def run(move: bool = True) -> None:
     Args:
         move: When ``True`` (default) execute all phases for real.
               When ``False`` perform a dry-run and print the plan to stdout.
+        downloads: Source folder to scan.  Defaults to the module-level
+            :data:`DOWNLOADS` constant when omitted.
+        library_root: Library root to organise into.  Defaults to the
+            module-level :data:`LIBRARY_ROOT` constant when omitted.
     """
     _setup_logging()
+    src = downloads if downloads is not None else DOWNLOADS
+    dst = library_root if library_root is not None else LIBRARY_ROOT
     dry_run = not move
 
     # Phase 1
-    phase1_actions = preprocess_downloads_zips(DOWNLOADS, dry_run=dry_run)
+    phase1_actions = preprocess_downloads_zips(src, dry_run=dry_run)
 
     # Phase 2
-    library_index = build_library_index(LIBRARY_ROOT)
+    library_index = build_library_index(dst)
 
     # Phase 3
-    candidates, skipped = collect(DOWNLOADS, library_index)
+    candidates, skipped = collect(src, library_index, dst)
 
     # Phase 5 preview (needed for dry-run output regardless of mode)
-    lib_zips = clean_library_zips(LIBRARY_ROOT, dry_run=True)
+    lib_zips = clean_library_zips(dst, dry_run=True)
 
     if dry_run:
-        print_plan(phase1_actions, candidates, skipped, lib_zips)
+        print_plan(phase1_actions, candidates, skipped, lib_zips, dst)
         return
 
     # Phase 4 — execute moves
@@ -730,7 +746,7 @@ def run(move: bool = True) -> None:
         logger.info("Skipped (duplicate): %s", name)
 
     # Phase 5 — clean library ZIPs
-    clean_library_zips(LIBRARY_ROOT, dry_run=False)
+    clean_library_zips(dst, dry_run=False)
 
 
 def main() -> None:

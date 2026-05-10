@@ -11,6 +11,11 @@ Usage:
 
 Dependencies:
     pip install pystray Pillow
+
+Icon credit:
+    "3d-modeling" icon by dickprayuda (Flaticon). Master art lives at
+    ``3d-modeling.png``; ``app-icon-100.png`` and ``app-icon.ico`` are derived
+    from it (white-background composited, multi-size).
 """
 
 import ctypes
@@ -26,6 +31,7 @@ import ttkbootstrap as ttb
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from tkinter import filedialog
 from typing import Any
 
 import pystray
@@ -46,7 +52,7 @@ SCRIPT_DIR: Path = _APP_DIR
 SCRIPT_PATH: Path = _APP_DIR / "sort_downloads.py"   # unused when frozen
 CONFIG_PATH: Path = _APP_DIR / "sort_downloads_config.json"
 LOG_PATH: Path = _APP_DIR / "sort_downloads.log"
-ICON_SRC: Path = _ASSETS_DIR / "icons8-3d-printer-100.png"
+ICON_SRC: Path = _ASSETS_DIR / "app-icon-100.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -89,6 +95,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 60,
     "autostart": False,
     "last_run": None,
+    "source_dir": str(Path.home() / "Downloads"),
+    "dest_dir": str(Path.home() / "3D Prints"),
 }
 
 
@@ -259,6 +267,32 @@ class SyncApp:
                 row=i, column=0, sticky="w", pady=12)
             ttb.Label(status_frame, textvariable=var, bootstyle="secondary",  # type: ignore[call-arg]
                       anchor="w").grid(row=i, column=1, sticky="w", pady=12)
+
+        ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
+
+        # Folders
+        folders_frame = ttb.Frame(body)
+        folders_frame.pack(fill="x")
+
+        self._source_var = tk.StringVar(value=self._config["source_dir"])
+        self._dest_var = tk.StringVar(value=self._config["dest_dir"])
+
+        for row, (label_text, var, on_save) in enumerate([
+            ("Source folder:", self._source_var, self._on_source_change),
+            ("Library folder:", self._dest_var, self._on_dest_change),
+        ]):
+            ttb.Label(folders_frame, text=label_text, width=14, anchor="w").grid(
+                row=row, column=0, sticky="w", pady=8)
+            entry = ttb.Entry(folders_frame, textvariable=var, width=48)
+            entry.grid(row=row, column=1, sticky="ew", padx=8, pady=8)
+            entry.bind("<FocusOut>", lambda _e, fn=on_save: fn())
+            entry.bind("<Return>", lambda _e, fn=on_save: fn())
+            ttb.Button(
+                folders_frame, text="Browse…", bootstyle="secondary",  # type: ignore[call-arg]
+                command=lambda v=var, fn=on_save: self._browse_folder(v, fn),
+            ).grid(row=row, column=2, pady=8)
+
+        folders_frame.columnconfigure(1, weight=1)
 
         ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
 
@@ -445,7 +479,11 @@ class SyncApp:
         try:
             if getattr(sys, "frozen", False):
                 import sort_downloads  # bundled as a hidden import
-                sort_downloads.run(move=True)
+                sort_downloads.run(
+                    move=True,
+                    downloads=Path(self._config["source_dir"]).expanduser(),
+                    library_root=Path(self._config["dest_dir"]).expanduser(),
+                )
             else:
                 result = subprocess.run(
                     [sys.executable, str(SCRIPT_PATH), "--move"],
@@ -473,6 +511,39 @@ class SyncApp:
     # ------------------------------------------------------------------
     # Config callbacks
     # ------------------------------------------------------------------
+
+    def _browse_folder(self, var: tk.StringVar, on_save: "Any") -> None:
+        """Open a folder picker; update *var* and persist via *on_save* on selection.
+
+        Args:
+            var: StringVar bound to the entry that should receive the chosen path.
+            on_save: Callback invoked after a folder is chosen to persist the change.
+        """
+        chosen = filedialog.askdirectory(
+            initialdir=var.get() or str(Path.home()),
+            parent=self.root,
+        )
+        if chosen:
+            var.set(chosen)
+            on_save()
+
+    def _on_source_change(self) -> None:
+        """Persist the source folder; warn (don't block) if it does not exist."""
+        p = Path(self._source_var.get()).expanduser()
+        if not p.exists():
+            logger.warning("Source folder does not exist yet: %s", p)
+        self._config["source_dir"] = str(p)
+        save_config(self._config)
+
+    def _on_dest_change(self) -> None:
+        """Persist the destination folder, creating it if missing."""
+        p = Path(self._dest_var.get()).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.error("Could not create destination folder %s: %s", p, exc)
+        self._config["dest_dir"] = str(p)
+        save_config(self._config)
 
     def _on_interval_change(self) -> None:
         """Persist the new interval value when the spinbox changes."""

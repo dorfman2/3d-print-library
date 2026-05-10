@@ -4,14 +4,14 @@
 
 [Setup]
 AppName=3D Print Sync
-AppVersion=0.5.0
+AppVersion=1.0.0
 AppPublisher=dorfmandesign
 AppPublisherURL=https://github.com/dorfman2/3d-print-library
 DefaultDirName={localappdata}\3DPrintSync
 DisableProgramGroupPage=no
 OutputDir=dist
 OutputBaseFilename=3DPrintSync-Setup
-SetupIconFile=icons8-3d-printer.ico
+SetupIconFile=app-icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -25,11 +25,16 @@ Name: "startmenu";  Description: "Create a &Start Menu entry";   GroupDescriptio
 
 [Files]
 Source: "dist\3DPrintSync\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+; PyInstaller 6.x stashes bundled data under _internal\, so place a copy of the
+; .ico at the install root for shortcut IconFilename references.
+Source: "app-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userdesktop}\3D Print Sync";                Filename: "{app}\3DPrintSync.exe"; IconFilename: "{app}\icons8-3d-printer.ico"; Tasks: desktopicon
-Name: "{userprograms}\3D Print Sync\3D Print Sync"; Filename: "{app}\3DPrintSync.exe"; IconFilename: "{app}\icons8-3d-printer.ico"; Tasks: startmenu
-Name: "{userprograms}\3D Print Sync\Uninstall";     Filename: "{uninstallexe}";                                                     Tasks: startmenu
+Name: "{userdesktop}\3D Print Sync";                Filename: "{app}\3DPrintSync.exe"; IconFilename: "{app}\app-icon.ico"; Tasks: desktopicon
+Name: "{userprograms}\3D Print Sync\3D Print Sync"; Filename: "{app}\3DPrintSync.exe"; IconFilename: "{app}\app-icon.ico"; Tasks: startmenu
+; Uninstall shortcut is always created so users have a discoverable entry
+; even when the optional Start Menu task is left unchecked.
+Name: "{userprograms}\3D Print Sync\Uninstall";     Filename: "{uninstallexe}"
 
 [UninstallDelete]
 ; Remove runtime-generated files that the uninstaller won't know about
