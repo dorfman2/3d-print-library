@@ -5,13 +5,23 @@
 4 - Timelapses/
 5 - Designer Files/
 
-# Runtime config (user-specific)
+# Runtime / user-specific files
 sort_downloads_config.json
+sort_downloads.log
 
-# Python
+# PyInstaller build artefacts
+build/
+dist/
+*.spec.bak
+
+# Python caches
 __pycache__/
 *.pyc
 *.pyo
+.mypy_cache/
+.ruff_cache/
 
-# Local Claude settings
+# Claude Code — local settings and runtime/personal dirs
 .claude/settings.local.json
+.claude/cli-agents/
+.claude/memory/

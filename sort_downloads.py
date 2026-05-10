@@ -682,19 +682,19 @@ def _setup_logging() -> None:
 
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    """Entry point: parse arguments, run all five phases in dry-run or execute mode."""
+def run(move: bool = True) -> None:
+    """Execute all five phases programmatically.
+
+    Called directly by the frozen GUI app (``sort_downloads_app.exe``) so it can
+    invoke the sync without launching a subprocess.  Also used by ``main()`` after
+    argument parsing.
+
+    Args:
+        move: When ``True`` (default) execute all phases for real.
+              When ``False`` perform a dry-run and print the plan to stdout.
+    """
     _setup_logging()
-    parser = argparse.ArgumentParser(
-        description="Move 3D print files from Downloads into the library."
-    )
-    parser.add_argument(
-        "--move",
-        action="store_true",
-        help="Execute moves (default is dry run).",
-    )
-    args = parser.parse_args()
-    dry_run = not args.move
+    dry_run = not move
 
     # Phase 1
     phase1_actions = preprocess_downloads_zips(DOWNLOADS, dry_run=dry_run)
@@ -731,6 +731,25 @@ def main() -> None:
 
     # Phase 5 — clean library ZIPs
     clean_library_zips(LIBRARY_ROOT, dry_run=False)
+
+
+def main() -> None:
+    """CLI entry point: parse ``--move`` flag and delegate to :func:`run`.
+
+    Raises:
+        SystemExit: On argument parsing errors (standard argparse behaviour).
+    """
+    _setup_logging()
+    parser = argparse.ArgumentParser(
+        description="Move 3D print files from Downloads into the library."
+    )
+    parser.add_argument(
+        "--move",
+        action="store_true",
+        help="Execute moves (default is dry run).",
+    )
+    args = parser.parse_args()
+    run(move=args.move)
 
 
 if __name__ == "__main__":

@@ -33,11 +33,20 @@ from PIL import Image, ImageDraw, ImageTk
 
 logger = logging.getLogger(__name__)
 
-SCRIPT_DIR: Path = Path(__file__).parent
-SCRIPT_PATH: Path = SCRIPT_DIR / "sort_downloads.py"
-CONFIG_PATH: Path = SCRIPT_DIR / "sort_downloads_config.json"
-LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
-ICON_SRC: Path = SCRIPT_DIR / "icons8-3d-printer-100.png"
+# When frozen by PyInstaller: writable files (config, log) go to the install dir
+# alongside the .exe; read-only bundled assets come from _MEIPASS.
+if getattr(sys, "frozen", False):
+    _APP_DIR: Path = Path(sys.executable).parent
+    _ASSETS_DIR: Path = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+else:
+    _APP_DIR = Path(__file__).parent
+    _ASSETS_DIR = Path(__file__).parent
+
+SCRIPT_DIR: Path = _APP_DIR
+SCRIPT_PATH: Path = _APP_DIR / "sort_downloads.py"   # unused when frozen
+CONFIG_PATH: Path = _APP_DIR / "sort_downloads_config.json"
+LOG_PATH: Path = _APP_DIR / "sort_downloads.log"
+ICON_SRC: Path = _ASSETS_DIR / "icons8-3d-printer-100.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -208,6 +217,7 @@ class SyncApp:
         self.root.withdraw()
 
         self._build_window()
+        self._refresh_labels()  # populate labels from persisted state
         self._build_tray()
 
         # Show window unless --minimized flag was passed
@@ -423,24 +433,34 @@ class SyncApp:
             self._schedule_next()
 
     def _run_sync(self) -> None:
-        """Run sort_downloads.py --move as a subprocess and record the timestamp."""
+        """Run the sync and record the timestamp.
+
+        When running as a frozen PyInstaller bundle, imports and calls
+        :func:`sort_downloads.run` directly (no subprocess needed).
+        When running as a plain Python script, launches a subprocess so that
+        a crash in the sync logic cannot take down the GUI process.
+        """
         logger.info("Sync run starting")
         self.root.after(0, lambda: self._status_var.set("Running"))
         try:
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH), "--move"],
-                capture_output=True,
-                check=False,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            if result.returncode != 0:
-                logger.warning("Sync exited with code %d", result.returncode)
-                if result.stderr:
-                    logger.warning("stderr: %s", result.stderr.strip())
-        except OSError as exc:
-            logger.error("Failed to launch sync subprocess: %s", exc)
+            if getattr(sys, "frozen", False):
+                import sort_downloads  # bundled as a hidden import
+                sort_downloads.run(move=True)
+            else:
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT_PATH), "--move"],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if result.returncode != 0:
+                    logger.warning("Sync exited with code %d", result.returncode)
+                    if result.stderr:
+                        logger.warning("stderr: %s", result.stderr.strip())
+        except Exception as exc:
+            logger.error("Sync failed: %s", exc)
         finally:
             self._last_run = datetime.now()
             self._config["last_run"] = self._last_run.isoformat()
