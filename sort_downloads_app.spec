@@ -12,8 +12,9 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
-        ("app-icon-100.png", "."),
-        ("app-icon.ico",     "."),
+        ("app-icon-100.png",        "."),
+        ("app-icon.ico",            "."),
+        ("categories.default.json", "."),
     ],
     hiddenimports=[
         "sort_downloads",

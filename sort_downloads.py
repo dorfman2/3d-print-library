@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import re
 import shutil
@@ -196,7 +197,7 @@ def has_print_files(path: Path) -> bool:
     )
 
 
-def categorize(name: str) -> str:
+def categorize(name: str, categories: dict[str, list[str]] | None = None) -> str:
     """Assign a library category to *name* via keyword scoring.
 
     Normalises *name* to lowercase with spaces, counts keyword hits per
@@ -205,19 +206,45 @@ def categorize(name: str) -> str:
 
     Args:
         name: Project folder name or file stem.
+        categories: Mapping of category folder name -> keyword list. Falls back
+            to the module-level :data:`CATEGORY_KEYWORDS` constant when omitted.
 
     Returns:
         Category folder name, e.g. ``'3 - Office'``, or ``'Uncategorized'``.
     """
+    cats = categories if categories is not None else CATEGORY_KEYWORDS
     normalized = name.lower().replace("_", " ").replace("-", " ")
     scores: dict[str, int] = {}
-    for category, keywords in CATEGORY_KEYWORDS.items():
+    for category, keywords in cats.items():
         score = sum(1 for kw in keywords if kw in normalized)
         if score > 0:
             scores[category] = score
     if not scores:
         return "Uncategorized"
     return max(scores, key=lambda c: scores[c])
+
+
+def load_categories(path: Path | None = None) -> dict[str, list[str]]:
+    """Load categories + keywords from JSON, falling back to bundled defaults.
+
+    Args:
+        path: Path to a ``categories.json`` file shaped as
+            ``{"version": 1, "categories": [{"name": ..., "keywords": [...]}, ...]}``.
+            When ``None`` or missing, returns a copy of the module-level
+            :data:`CATEGORY_KEYWORDS` constant.
+
+    Returns:
+        Dict mapping category folder name to keyword list (insertion-ordered).
+
+    Raises:
+        json.JSONDecodeError: When *path* exists but is not valid JSON.
+        KeyError: When the JSON document is missing required fields.
+    """
+    if path is None or not path.exists():
+        return {name: list(kws) for name, kws in CATEGORY_KEYWORDS.items()}
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return {entry["name"]: list(entry["keywords"]) for entry in data["categories"]}
 
 
 def unique_dest(path: Path) -> Path:
@@ -444,6 +471,7 @@ def collect(
     downloads: Path,
     library_index: set[str],
     library_root: Path,
+    categories: dict[str, list[str]] | None = None,
 ) -> tuple[list[Candidate], list[str]]:
     """Phase 3 — scan Downloads and return categorised candidates plus skips.
 
@@ -455,6 +483,8 @@ def collect(
         downloads: Path to the Downloads folder.
         library_index: Set of cleaned names already in the library (Phase 2).
         library_root: Path to the library root used to build destination paths.
+        categories: Optional category -> keyword mapping passed to
+            :func:`categorize`.  Falls back to :data:`CATEGORY_KEYWORDS`.
 
     Returns:
         A tuple of (candidates, skipped_names) where *candidates* is a list of
@@ -473,14 +503,14 @@ def collect(
     for item in sorted(downloads.iterdir()):
         if item.is_dir():
             if has_print_files(item):
-                _add_candidate(candidates, skipped, item, item.name, SourceKind.FOLDER, library_index, library_root)
+                _add_candidate(candidates, skipped, item, item.name, SourceKind.FOLDER, library_index, library_root, categories)
         elif item.is_file():
             suffix = item.suffix.lower()
             if suffix in PRINT_EXTENSIONS:
-                _add_candidate(candidates, skipped, item, item.stem, SourceKind.LOOSE_FILE, library_index, library_root)
+                _add_candidate(candidates, skipped, item, item.stem, SourceKind.LOOSE_FILE, library_index, library_root, categories)
             elif suffix in ZIP_EXTENSIONS and zip_contains_print_files(item):
                 name = zip_project_name(item)
-                _add_candidate(candidates, skipped, item, name, SourceKind.ZIP, library_index, library_root)
+                _add_candidate(candidates, skipped, item, name, SourceKind.ZIP, library_index, library_root, categories)
 
     return candidates, skipped
 
@@ -493,6 +523,7 @@ def _add_candidate(
     kind: SourceKind,
     library_index: set[str],
     library_root: Path,
+    categories: dict[str, list[str]] | None = None,
 ) -> None:
     """Build a Candidate or record a skip, then append to the appropriate list.
 
@@ -504,12 +535,14 @@ def _add_candidate(
         kind: Source type.
         library_index: Set of cleaned names already in the library.
         library_root: Path to the library root used to build the destination.
+        categories: Optional category -> keyword mapping passed to
+            :func:`categorize`.
     """
     cleaned = clean_name(name)
     if cleaned in library_index:
         skipped.append(name)
         return
-    category = categorize(name)
+    category = categorize(name, categories)
     dest = unique_dest(library_root / category / cleaned)
     candidates.append(Candidate(source=source, name=name, clean=cleaned, kind=kind, category=category, dest=dest))
 
@@ -692,6 +725,7 @@ def run(
     move: bool = True,
     downloads: Path | None = None,
     library_root: Path | None = None,
+    categories_path: Path | None = None,
 ) -> None:
     """Execute all five phases programmatically.
 
@@ -706,10 +740,14 @@ def run(
             :data:`DOWNLOADS` constant when omitted.
         library_root: Library root to organise into.  Defaults to the
             module-level :data:`LIBRARY_ROOT` constant when omitted.
+        categories_path: Optional path to a ``categories.json`` file.  When
+            ``None`` or the file is missing, the bundled
+            :data:`CATEGORY_KEYWORDS` defaults are used.
     """
     _setup_logging()
     src = downloads if downloads is not None else DOWNLOADS
     dst = library_root if library_root is not None else LIBRARY_ROOT
+    cats = load_categories(categories_path)
     dry_run = not move
 
     # Phase 1
@@ -719,7 +757,7 @@ def run(
     library_index = build_library_index(dst)
 
     # Phase 3
-    candidates, skipped = collect(src, library_index, dst)
+    candidates, skipped = collect(src, library_index, dst, cats)
 
     # Phase 5 preview (needed for dry-run output regardless of mode)
     lib_zips = clean_library_zips(dst, dry_run=True)

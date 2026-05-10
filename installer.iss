@@ -4,7 +4,7 @@
 
 [Setup]
 AppName=3D Print Sync
-AppVersion=1.0.0
+AppVersion=1.1.0
 AppPublisher=dorfmandesign
 AppPublisherURL=https://github.com/dorfman2/3d-print-library
 DefaultDirName={localappdata}\3DPrintSync
@@ -40,6 +40,7 @@ Name: "{userprograms}\3D Print Sync\Uninstall";     Filename: "{uninstallexe}"
 ; Remove runtime-generated files that the uninstaller won't know about
 Type: files;          Name: "{app}\sort_downloads_config.json"
 Type: files;          Name: "{app}\sort_downloads.log"
+Type: files;          Name: "{app}\categories.json"
 Type: filesandordirs; Name: "{app}"
 
 [Run]

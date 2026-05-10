@@ -21,6 +21,8 @@ Icon credit:
 import ctypes
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -31,7 +33,7 @@ import ttkbootstrap as ttb
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Any
 
 import pystray
@@ -52,6 +54,8 @@ SCRIPT_DIR: Path = _APP_DIR
 SCRIPT_PATH: Path = _APP_DIR / "sort_downloads.py"   # unused when frozen
 CONFIG_PATH: Path = _APP_DIR / "sort_downloads_config.json"
 LOG_PATH: Path = _APP_DIR / "sort_downloads.log"
+CATEGORIES_PATH: Path = _APP_DIR / "categories.json"
+CATEGORIES_DEFAULT: Path = _ASSETS_DIR / "categories.default.json"
 ICON_SRC: Path = _ASSETS_DIR / "app-icon-100.png"
 AUTOSTART_KEY: str = "3DPrintSync"
 AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -156,6 +160,109 @@ def save_config(cfg: dict[str, Any]) -> None:
         json.dump(cfg, fh, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# Categories — file management + on-disk helpers
+# ---------------------------------------------------------------------------
+
+def ensure_categories_file(
+    target: Path = CATEGORIES_PATH,
+    default: Path = CATEGORIES_DEFAULT,
+) -> None:
+    """Copy the bundled *default* categories file to *target* if absent.
+
+    Args:
+        target: Destination ``categories.json`` in the writable install dir.
+        default: Bundled defaults shipped via PyInstaller datas (``_MEIPASS``).
+    """
+    if target.exists() or not default.exists():
+        return
+    shutil.copy(default, target)
+
+
+def load_categories_dict(path: Path = CATEGORIES_PATH) -> dict[str, list[str]]:
+    """Load the GUI's editable categories file.
+
+    Args:
+        path: Path to ``categories.json``.
+
+    Returns:
+        Dict mapping category name to keyword list (insertion-ordered).  When
+        *path* is missing returns the bundled default mapping.
+    """
+    import sort_downloads
+    return sort_downloads.load_categories(path)
+
+
+def save_categories_dict(
+    categories: dict[str, list[str]],
+    path: Path = CATEGORIES_PATH,
+) -> None:
+    """Persist *categories* to *path* using the v1 schema.
+
+    Args:
+        categories: Insertion-ordered mapping of category name to keyword list.
+        path: Destination JSON file.
+    """
+    payload = {
+        "version": 1,
+        "categories": [
+            {"name": name, "keywords": list(kws)}
+            for name, kws in categories.items()
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+
+
+def rename_category_folder(library_root: Path, old: str, new: str) -> None:
+    """Rename ``library_root/old`` -> ``library_root/new`` if the old path exists.
+
+    Tolerant of a missing source (no-ops); raises if *new* already exists so
+    the caller can decide whether to merge.
+
+    Args:
+        library_root: Root of the on-disk library tree.
+        old: Existing category folder name.
+        new: Target category folder name.
+
+    Raises:
+        FileExistsError: When ``library_root/new`` already exists.
+    """
+    src = library_root / old
+    dst = library_root / new
+    if not src.exists():
+        return
+    if dst.exists():
+        raise FileExistsError(str(dst))
+    os.rename(src, dst)
+
+
+def move_category_to_uncategorized(library_root: Path, name: str) -> None:
+    """Move every project folder under *name* into ``Uncategorized``.
+
+    Uses :func:`sort_downloads.unique_dest` for collision-safety so existing
+    entries in ``Uncategorized`` are never overwritten.  Removes the empty
+    source directory afterwards.
+
+    Args:
+        library_root: Root of the on-disk library tree.
+        name: Category folder to dissolve.
+    """
+    import sort_downloads
+    src = library_root / name
+    if not src.exists():
+        return
+    uncategorized = library_root / "Uncategorized"
+    uncategorized.mkdir(parents=True, exist_ok=True)
+    for child in list(src.iterdir()):
+        target = sort_downloads.unique_dest(uncategorized / child.name)
+        shutil.move(str(child), str(target))
+    try:
+        os.rmdir(src)
+    except OSError:
+        pass
+
+
 def _make_icon_image(running: bool) -> Image.Image:
     """Return a PIL image for the system tray icon.
 
@@ -203,6 +310,7 @@ class SyncApp:
     def __init__(self) -> None:
         """Initialise config, tkinter root, control window, and tray icon."""
         _setup_logging()
+        ensure_categories_file()
         self._config = load_config()
         logger.info("sort_downloads_app starting (interval=%d min)", self._config["interval_minutes"])
         self._timer: threading.Timer | None = None
@@ -327,7 +435,7 @@ class SyncApp:
         )
         self._stop_btn.pack(side="left")
 
-        # Run Now / Open Logs
+        # Run Now / Open Logs / Categories
         row2 = ttb.Frame(body)
         row2.pack(fill="x")
         ttb.Button(
@@ -337,7 +445,12 @@ class SyncApp:
         ttb.Button(
             row2, text="Open Logs", bootstyle="info",  # type: ignore[call-arg]
             padding=(32, 16), command=self._on_open_logs,
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 20))
+        self._categories_btn = ttb.Button(
+            row2, text="Categories…", bootstyle="info",  # type: ignore[call-arg]
+            padding=(32, 16), command=self._on_open_categories,
+        )
+        self._categories_btn.pack(side="left")
 
         ttb.Separator(body, bootstyle="secondary").pack(fill="x", pady=28)  # type: ignore[call-arg]
 
@@ -476,6 +589,7 @@ class SyncApp:
         """
         logger.info("Sync run starting")
         self.root.after(0, lambda: self._status_var.set("Running"))
+        self.root.after(0, lambda: self._categories_btn.config(state="disabled"))
         try:
             if getattr(sys, "frozen", False):
                 import sort_downloads  # bundled as a hidden import
@@ -483,6 +597,7 @@ class SyncApp:
                     move=True,
                     downloads=Path(self._config["source_dir"]).expanduser(),
                     library_root=Path(self._config["dest_dir"]).expanduser(),
+                    categories_path=CATEGORIES_PATH,
                 )
             else:
                 result = subprocess.run(
@@ -505,6 +620,7 @@ class SyncApp:
             save_config(self._config)
             logger.info("Sync run finished")
             self.root.after(0, self._refresh_labels)
+            self.root.after(0, lambda: self._categories_btn.config(state="normal"))
             if not self._running:
                 self.root.after(0, lambda: self._status_var.set("Idle"))
 
@@ -567,6 +683,17 @@ class SyncApp:
         """Button: run a single sync immediately in a background thread."""
         threading.Thread(target=self._run_sync, daemon=True).start()
 
+    def _on_open_categories(self) -> None:
+        """Button: open the Categories editor.
+
+        Operates on a working copy of ``categories.json``.  When the dialog is
+        saved, the file is rewritten and any disk-affecting actions (renames,
+        deletes) are applied against the configured library root.
+        """
+        library_root = Path(self._config["dest_dir"]).expanduser()
+        dialog = CategoriesDialog(self.root, CATEGORIES_PATH, library_root)
+        dialog.show()
+
     def _on_open_logs(self) -> None:
         """Button: open the log file in the default text editor."""
         import os
@@ -589,6 +716,343 @@ class SyncApp:
         self._tray.stop()
         self.root.destroy()
         sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Categories editor dialog
+# ---------------------------------------------------------------------------
+
+class CategoriesDialog:
+    """Modal dialog for editing the editable category list and per-category keywords.
+
+    Operates on a working copy of the categories dict so Cancel discards changes.
+    Save writes ``categories.json`` and applies any disk-affecting operations
+    (rename or delete of the matching folder under *library_root*) for category
+    names that changed since the dialog was opened.
+
+    Attributes:
+        parent: The Tk root window that owns this modal.
+        categories_path: Destination JSON file for persisted edits.
+        library_root: On-disk library root used for rename / delete operations.
+    """
+
+    UNCATEGORIZED: str = "Uncategorized"
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        categories_path: Path,
+        library_root: Path,
+    ) -> None:
+        """Build the dialog widgets and load the current categories file.
+
+        Args:
+            parent: Parent Tk window — the dialog is modal relative to it.
+            categories_path: ``categories.json`` location.
+            library_root: Library root used for on-disk rename/delete actions.
+        """
+        self.parent = parent
+        self.categories_path = categories_path
+        self.library_root = library_root
+
+        self._original: dict[str, list[str]] = load_categories_dict(categories_path)
+        self._working: dict[str, list[str]] = {
+            name: list(kws) for name, kws in self._original.items()
+        }
+        self._original_names: list[str] = list(self._original.keys())
+        # Track renames as ordered pairs of (original_name, current_name).  When
+        # the user renames "0 - Cal" to "00 - Cal" we record ("0 - Cal", "00 - Cal").
+        self._renamed: dict[str, str] = {}
+        # Categories the user has deleted from the working copy.
+        self._deleted: set[str] = set()
+        self._selected: str | None = None
+        self._dirty: bool = False
+        self._suppress_keyword_save: bool = False
+
+        self.top = tk.Toplevel(parent)
+        self.top.title("Edit Categories")
+        self.top.transient(parent)
+        self.top.resizable(True, True)
+        self.top.minsize(640, 460)
+        self.top.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self._build()
+        self._reload_listbox()
+        if self._working:
+            self._listbox.selection_set(0)
+            self._on_select()
+
+    def _build(self) -> None:
+        """Lay out the listbox, keyword editor, and action buttons."""
+        body = ttb.Frame(self.top, padding=16)
+        body.pack(fill="both", expand=True)
+
+        cats_frame = ttb.LabelFrame(body, text="Categories", padding=8)
+        cats_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+
+        self._listbox = tk.Listbox(cats_frame, exportselection=False, height=14, width=28)
+        self._listbox.pack(side="left", fill="both", expand=True)
+        self._listbox.bind("<<ListboxSelect>>", lambda _e: self._on_select())
+        sb = ttb.Scrollbar(cats_frame, orient="vertical", command=self._listbox.yview)
+        sb.pack(side="right", fill="y")
+        self._listbox.config(yscrollcommand=sb.set)
+
+        kw_frame = ttb.LabelFrame(body, text="Keywords (one per line)", padding=8)
+        kw_frame.grid(row=0, column=1, sticky="nsew")
+
+        self._kw_text = tk.Text(kw_frame, width=36, height=14, wrap="none", undo=True)
+        self._kw_text.pack(side="left", fill="both", expand=True)
+        kwsb = ttb.Scrollbar(kw_frame, orient="vertical", command=self._kw_text.yview)
+        kwsb.pack(side="right", fill="y")
+        self._kw_text.config(yscrollcommand=kwsb.set)
+        self._kw_text.bind("<FocusOut>", lambda _e: self._save_keywords_for_selection())
+        self._kw_text.bind("<<Modified>>", self._on_text_modified)
+
+        body.columnconfigure(0, weight=0)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Action row beneath the lists
+        actions = ttb.Frame(self.top, padding=(16, 0))
+        actions.pack(fill="x")
+        ttb.Button(actions, text="Add",    command=self._on_add).pack(side="left", padx=4)
+        ttb.Button(actions, text="Rename", command=self._on_rename).pack(side="left", padx=4)
+        ttb.Button(actions, text="Delete", command=self._on_delete).pack(side="left", padx=4)
+        ttb.Button(actions, text="↑",      command=lambda: self._on_move(-1)).pack(side="left", padx=4)
+        ttb.Button(actions, text="↓",      command=lambda: self._on_move(1)).pack(side="left", padx=4)
+
+        footer = ttb.Frame(self.top, padding=16)
+        footer.pack(fill="x")
+        ttb.Button(footer, text="Save",   bootstyle="primary",   # type: ignore[call-arg]
+                   command=self._on_save).pack(side="right", padx=4)
+        ttb.Button(footer, text="Cancel", bootstyle="secondary",  # type: ignore[call-arg]
+                   command=self._on_cancel).pack(side="right", padx=4)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def show(self) -> dict[str, list[str]] | None:
+        """Run the dialog modally; return the saved categories dict or ``None``.
+
+        Returns:
+            The updated categories dict when Save was clicked, otherwise
+            ``None`` (Cancel/closed).
+        """
+        self.top.grab_set()
+        self.top.wait_window()
+        return self._working if self._dirty and self._saved else None
+
+    _saved: bool = False
+
+    # ------------------------------------------------------------------
+    # Listbox helpers
+    # ------------------------------------------------------------------
+
+    def _reload_listbox(self, select: str | None = None) -> None:
+        """Repopulate the listbox from the working dict, restoring selection."""
+        self._listbox.delete(0, tk.END)
+        for name in self._working.keys():
+            self._listbox.insert(tk.END, name)
+        if select is not None and select in self._working:
+            idx = list(self._working.keys()).index(select)
+            self._listbox.selection_set(idx)
+            self._listbox.see(idx)
+            self._selected = select
+        else:
+            self._selected = None
+
+    def _on_select(self) -> None:
+        """When the listbox selection changes, swap the keyword editor's contents."""
+        self._save_keywords_for_selection()
+        sel = self._listbox.curselection()
+        if not sel:
+            self._selected = None
+            self._suppress_keyword_save = True
+            self._kw_text.delete("1.0", tk.END)
+            self._kw_text.edit_modified(False)
+            self._suppress_keyword_save = False
+            return
+        name = self._listbox.get(sel[0])
+        self._selected = name
+        self._suppress_keyword_save = True
+        self._kw_text.delete("1.0", tk.END)
+        self._kw_text.insert("1.0", "\n".join(self._working.get(name, [])))
+        self._kw_text.edit_modified(False)
+        self._suppress_keyword_save = False
+
+    def _on_text_modified(self, _event: object) -> None:
+        """Mark the working copy dirty as the user types in the keyword editor."""
+        if self._suppress_keyword_save:
+            return
+        if self._kw_text.edit_modified():
+            self._dirty = True
+
+    def _save_keywords_for_selection(self) -> None:
+        """Persist the keyword editor's contents to the working dict."""
+        if self._selected is None:
+            return
+        raw = self._kw_text.get("1.0", tk.END)
+        keywords = [line.strip() for line in raw.splitlines() if line.strip()]
+        if self._working.get(self._selected) != keywords:
+            self._working[self._selected] = keywords
+            self._dirty = True
+        self._kw_text.edit_modified(False)
+
+    # ------------------------------------------------------------------
+    # Action handlers
+    # ------------------------------------------------------------------
+
+    def _on_add(self) -> None:
+        """Prompt for a new category name; reject blanks, duplicates, and Uncategorized."""
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Add Category", "Category name:", parent=self.top)
+        if not name:
+            return
+        name = name.strip()
+        if not name or name == self.UNCATEGORIZED or name in self._working:
+            messagebox.showerror("Add Category", f"Invalid or duplicate name: {name!r}", parent=self.top)
+            return
+        self._working[name] = []
+        self._dirty = True
+        self._reload_listbox(select=name)
+        self._on_select()
+
+    def _on_rename(self) -> None:
+        """Rename the selected category, refusing to clobber Uncategorized."""
+        if not self._selected:
+            return
+        from tkinter import simpledialog
+        old = self._selected
+        new = simpledialog.askstring(
+            "Rename Category", f"New name for {old!r}:",
+            initialvalue=old, parent=self.top,
+        )
+        if not new:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        if new == self.UNCATEGORIZED or new in self._working:
+            messagebox.showerror("Rename Category", f"Name already in use: {new!r}", parent=self.top)
+            return
+        # Preserve insertion order
+        self._working = {
+            (new if k == old else k): v for k, v in self._working.items()
+        }
+        # Track rename through whatever original name this category started as
+        for orig, cur in list(self._renamed.items()):
+            if cur == old:
+                self._renamed[orig] = new
+                break
+        else:
+            if old in self._original_names:
+                self._renamed[old] = new
+        self._dirty = True
+        self._reload_listbox(select=new)
+        self._on_select()
+
+    def _on_delete(self) -> None:
+        """Delete the selected category after confirmation."""
+        if not self._selected:
+            return
+        target = self._selected
+        if not messagebox.askyesno(
+            "Delete Category",
+            f"Delete category {target!r}?\n\nProjects already inside this folder will be moved to {self.UNCATEGORIZED!r} when you click Save.",
+            parent=self.top,
+        ):
+            return
+        # If this name (or its original) was tracked as a rename, drop it
+        for orig, cur in list(self._renamed.items()):
+            if cur == target:
+                self._deleted.add(orig)
+                del self._renamed[orig]
+                break
+        else:
+            if target in self._original_names:
+                self._deleted.add(target)
+        self._working.pop(target, None)
+        self._dirty = True
+        self._reload_listbox()
+        self._on_select()
+
+    def _on_move(self, direction: int) -> None:
+        """Move the selected category up (-1) or down (+1) in the order."""
+        if not self._selected:
+            return
+        names = list(self._working.keys())
+        try:
+            idx = names.index(self._selected)
+        except ValueError:
+            return
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(names):
+            return
+        names[idx], names[new_idx] = names[new_idx], names[idx]
+        self._working = {n: self._working[n] for n in names}
+        self._dirty = True
+        self._reload_listbox(select=self._selected)
+
+    # ------------------------------------------------------------------
+    # Save / Cancel
+    # ------------------------------------------------------------------
+
+    def _on_save(self) -> None:
+        """Apply renames + deletions on disk, then write ``categories.json``."""
+        self._save_keywords_for_selection()
+
+        # Apply on-disk renames first (failure here aborts before any deletes).
+        for orig, new in self._renamed.items():
+            try:
+                rename_category_folder(self.library_root, orig, new)
+            except FileExistsError as exc:
+                merge = messagebox.askyesno(
+                    "Rename clash",
+                    f"Library already has a folder named {new!r}.\n\nMerge contents from {orig!r} into it?",
+                    parent=self.top,
+                )
+                if not merge:
+                    messagebox.showinfo(
+                        "Save aborted",
+                        f"Rename of {orig!r} -> {new!r} skipped; resolve manually and Save again.",
+                        parent=self.top,
+                    )
+                    return
+                self._merge_category_folders(orig, new)
+            except OSError as exc:
+                messagebox.showerror(
+                    "Rename failed",
+                    f"Could not rename {orig!r} -> {new!r}: {exc}",
+                    parent=self.top,
+                )
+                return
+
+        for name in self._deleted:
+            move_category_to_uncategorized(self.library_root, name)
+
+        save_categories_dict(self._working, self.categories_path)
+        self._saved = True
+        self.top.grab_release()
+        self.top.destroy()
+
+    def _merge_category_folders(self, src_name: str, dst_name: str) -> None:
+        """Move children of ``library_root/src_name`` into ``library_root/dst_name``."""
+        import sort_downloads
+        src = self.library_root / src_name
+        dst = self.library_root / dst_name
+        for child in list(src.iterdir()):
+            target = sort_downloads.unique_dest(dst / child.name)
+            shutil.move(str(child), str(target))
+        try:
+            os.rmdir(src)
+        except OSError:
+            pass
+
+    def _on_cancel(self) -> None:
+        """Discard pending changes and close the dialog."""
+        self.top.grab_release()
+        self.top.destroy()
 
 
 # ---------------------------------------------------------------------------

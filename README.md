@@ -1,9 +1,12 @@
 # 3D Print Library Sync
 
+[![tests](https://github.com/dorfman2/3d-print-library/actions/workflows/test.yml/badge.svg)](https://github.com/dorfman2/3d-print-library/actions/workflows/test.yml)
+
 Automatically moves new 3D print files from a watched **Source folder** (your
 `Downloads` by default) into an organised **Library folder** (`%USERPROFILE%\3D
 Prints` by default) — clean folder names, no duplicates, no leftover ZIPs. Both
-folders are configurable from the tray app's control window.
+folders are configurable from the tray app's control window, along with the
+category list and per-category keywords.
 
 Two entry points:
 
@@ -56,17 +59,21 @@ The control window lets you:
 - Pick the **Source folder** to watch (defaults to `%USERPROFILE%\Downloads`)
 - Pick the **Library folder** to organise into (defaults to `%USERPROFILE%\3D Prints`,
   auto-created on first save)
+- Edit **Categories** — add / rename / delete category folders and their keyword
+  lists; renames move the on-disk folder, deletes move children to `Uncategorized`
 - Start / Stop the scheduler (interval 1–1440 minutes)
 - Run Now on demand
 - Open Logs
 - Toggle "Start on Boot" (writes/removes a Windows Registry autostart entry)
 - Exit
 
-Config is saved to `sort_downloads_config.json` alongside the executable.
+Config is saved alongside the executable: app preferences in
+`sort_downloads_config.json`, editable category list in `categories.json`
+(seeded from the bundled `categories.default.json` on first launch).
 
 ---
 
-## Installer (1.0.0)
+## Installer (1.1.0)
 
 A pre-built installer ships at `dist\3DPrintSync-Setup.exe`:
 
@@ -83,7 +90,7 @@ target machine.
 **Prerequisites (dev machine only):**
 
 ```powershell
-pip install pyinstaller
+pip install -r requirements.txt -r requirements-dev.txt
 # Download and install Inno Setup 6: https://jrsoftware.org/isinfo.php
 ```
 
@@ -93,8 +100,22 @@ pip install pyinstaller
 python build_installer.py
 ```
 
-Runs PyInstaller (`sort_downloads_app.spec`) then Inno Setup (`installer.iss`) and
-prints the path to the finished installer.
+Runs `pytest`, then PyInstaller (`sort_downloads_app.spec`), then Inno Setup
+(`installer.iss`).  A failing test aborts the build before any installer
+artefact is produced.
+
+---
+
+## Tests
+
+```powershell
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+The suite uses real files on `tmp_path` — no mocks (per the project's
+[python-prefs.md](.claude/rules/python-prefs.md) rule).  GitHub Actions runs
+the same tests on `windows-latest` for every push and pull request.
 
 ---
 
@@ -143,10 +164,15 @@ prints the path to the finished installer.
 | `sort_downloads_app.spec` | PyInstaller build spec |
 | `installer.iss` | Inno Setup 6 installer script |
 | `build_installer.py` | One-command installer build |
-| `requirements.txt` | Python dependencies |
+| `requirements.txt` | Python runtime dependencies |
+| `requirements-dev.txt` | Dev-only dependencies (pytest) |
 | `sort_downloads_requirements.md` | Detailed feature specification |
-| `sort_downloads_config.json` | Runtime config (gitignored) |
+| `sort_downloads_config.json` | Runtime app config (gitignored) |
+| `categories.json` | Runtime editable categories (gitignored; seeded on first launch) |
+| `categories.default.json` | Bundled default category list — seeds new installs |
 | `sort_downloads.log` | Runtime log — 5 MB rotating (gitignored) |
+| `tests/` | pytest suite (real-filesystem integration tests) |
+| `.github/workflows/test.yml` | CI — pytest on `windows-latest` for every push/PR |
 | `3d-modeling.png` | Master icon art (source for `app-icon-100.png` / `app-icon.ico`) |
 | `app-icon-100.png` | Tray and window icon (100×100, white-bg composited) |
 | `app-icon.ico` | Multi-size .ico for the .exe, installer, and shortcuts |

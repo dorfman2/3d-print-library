@@ -8,6 +8,7 @@
 # Runtime / user-specific files
 sort_downloads_config.json
 sort_downloads.log
+categories.json
 
 # PyInstaller build artefacts
 build/
@@ -20,6 +21,7 @@ __pycache__/
 *.pyo
 .mypy_cache/
 .ruff_cache/
+.pytest_cache/
 
 # Claude Code — local settings and runtime/personal dirs
 .claude/settings.local.json

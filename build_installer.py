@@ -34,7 +34,7 @@ def check_prerequisites() -> None:
     """Verify build tools are available; exit with a clear message if not.
 
     Raises:
-        SystemExit: When pyinstaller or ISCC.exe cannot be found.
+        SystemExit: When pyinstaller, pytest, or ISCC.exe cannot be found.
     """
     try:
         import PyInstaller  # noqa: F401
@@ -42,10 +42,33 @@ def check_prerequisites() -> None:
         print("ERROR: PyInstaller not found.  Run:  pip install pyinstaller")
         sys.exit(1)
 
+    try:
+        import pytest  # noqa: F401
+    except ImportError:
+        print("ERROR: pytest not found.  Run:  pip install -r requirements-dev.txt")
+        sys.exit(1)
+
     if not ISCC_PATH.exists():
         print(f"ERROR: Inno Setup 6 not found at {ISCC_PATH}")
         print("       Download from https://jrsoftware.org/isinfo.php")
         sys.exit(1)
+
+
+def run_pytest() -> None:
+    """Run the test suite; abort the build on any failure.
+
+    Raises:
+        SystemExit: When pytest exits with a non-zero return code.
+    """
+    print("=== Step 0: pytest ===")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests"],
+        cwd=str(SCRIPT_DIR),
+    )
+    if result.returncode != 0:
+        print(f"ERROR: pytest failed (exit {result.returncode})")
+        sys.exit(result.returncode)
+    print()
 
 
 def run_pyinstaller() -> None:
@@ -83,8 +106,9 @@ def run_inno_setup() -> None:
 
 
 def main() -> None:
-    """Orchestrate the full installer build."""
+    """Orchestrate the full installer build (pytest -> PyInstaller -> Inno Setup)."""
     check_prerequisites()
+    run_pytest()
     run_pyinstaller()
     run_inno_setup()
     print(f"Installer ready: {OUTPUT}")
