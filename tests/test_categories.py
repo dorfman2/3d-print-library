@@ -149,3 +149,33 @@ def test_move_category_to_uncategorized_avoids_collisions(library_root: Path) ->
 def test_move_category_to_uncategorized_handles_missing_source(library_root: Path) -> None:
     sda.move_category_to_uncategorized(library_root, "NeverExisted")
     # Must not raise; Uncategorized may or may not have been created
+
+
+# ---------------------------------------------------------------------------
+# discover_library_folders
+# ---------------------------------------------------------------------------
+
+
+def test_discover_library_folders_returns_sorted_subdirs(library_root: Path) -> None:
+    (library_root / "Z - Last").mkdir()
+    (library_root / "A - First").mkdir()
+    (library_root / "M - Middle").mkdir()
+    assert sda.discover_library_folders(library_root) == [
+        "A - First", "M - Middle", "Z - Last",
+    ]
+
+
+def test_discover_library_folders_excludes_uncategorized(library_root: Path) -> None:
+    (library_root / "Uncategorized").mkdir()
+    (library_root / "1 - Machines").mkdir()
+    assert sda.discover_library_folders(library_root) == ["1 - Machines"]
+
+
+def test_discover_library_folders_ignores_files(library_root: Path) -> None:
+    (library_root / "1 - Machines").mkdir()
+    (library_root / "loose.stl").write_bytes(b"solid")
+    assert sda.discover_library_folders(library_root) == ["1 - Machines"]
+
+
+def test_discover_library_folders_handles_missing_root(tmp_path: Path) -> None:
+    assert sda.discover_library_folders(tmp_path / "nope") == []

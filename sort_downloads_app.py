@@ -237,6 +237,29 @@ def rename_category_folder(library_root: Path, old: str, new: str) -> None:
     os.rename(src, dst)
 
 
+def discover_library_folders(library_root: Path) -> list[str]:
+    """Return sorted subdirectory names under *library_root*, minus Uncategorized.
+
+    Used by the Categories editor to pick up folders that were created or
+    renamed outside the app (e.g. in Explorer) so the JSON stays in sync with
+    the on-disk library.
+
+    Args:
+        library_root: Root of the on-disk library tree.
+
+    Returns:
+        Sorted list of immediate child directory names; empty if *library_root*
+        does not exist.  ``Uncategorized`` is never returned — it's a system
+        bucket, not an editable category.
+    """
+    if not library_root.exists():
+        return []
+    return sorted(
+        child.name for child in library_root.iterdir()
+        if child.is_dir() and child.name != "Uncategorized"
+    )
+
+
 def move_category_to_uncategorized(library_root: Path, name: str) -> None:
     """Move every project folder under *name* into ``Uncategorized``.
 
@@ -737,6 +760,9 @@ class CategoriesDialog:
     """
 
     UNCATEGORIZED: str = "Uncategorized"
+    # tk.Listbox has no per-row padx; pad each entry with whitespace so rows
+    # don't sit flush against the listbox edge.  Stripped when reading back.
+    _LB_PAD: str = "   "
 
     def __init__(
         self,
@@ -765,15 +791,22 @@ class CategoriesDialog:
         self._renamed: dict[str, str] = {}
         # Categories the user has deleted from the working copy.
         self._deleted: set[str] = set()
+        # Folders that exist on disk under library_root but aren't in the JSON
+        # yet (created or renamed externally in Explorer).  These get imported
+        # into the working copy on open so the editor stays in sync.
+        self._discovered_from_disk: list[str] = []
         self._selected: str | None = None
         self._dirty: bool = False
         self._suppress_keyword_save: bool = False
+        self._sync_from_disk()
 
         self.top = tk.Toplevel(parent)
         self.top.title("Edit Categories")
         self.top.transient(parent)
         self.top.resizable(True, True)
-        self.top.minsize(640, 460)
+        self.top.geometry("1100x600")
+        self.top.minsize(960, 520)
+        self.top.configure(bg=CLR_BG)
         self.top.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         self._build()
@@ -781,52 +814,125 @@ class CategoriesDialog:
         if self._working:
             self._listbox.selection_set(0)
             self._on_select()
+        # If we imported folders from disk, the working copy now differs from
+        # categories.json — surface the unsaved-changes indicator.
+        if self._discovered_from_disk:
+            self._mark_dirty()
 
     def _build(self) -> None:
-        """Lay out the listbox, keyword editor, and action buttons."""
-        body = ttb.Frame(self.top, padding=16)
-        body.pack(fill="both", expand=True)
+        """Lay out the listbox, keyword editor, and action buttons.
 
-        cats_frame = ttb.LabelFrame(body, text="Categories", padding=8)
-        cats_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        Uses a single grid on ``self.top`` for predictable sizing.  Avoids
+        ``ttb.LabelFrame`` because the custom 3dprint theme doesn't ship
+        a labelframe style — plain ``tk.Label`` headers render reliably.
+        """
+        # 4 rows: optional discovery banner | lists | action buttons | footer
+        self.top.columnconfigure(0, weight=1)
+        self.top.rowconfigure(1, weight=1)
 
-        self._listbox = tk.Listbox(cats_frame, exportselection=False, height=14, width=28)
-        self._listbox.pack(side="left", fill="both", expand=True)
+        # Discovery banner — only rendered when _sync_from_disk found new folders.
+        if self._discovered_from_disk:
+            banner = ttb.Frame(self.top, padding=(40, 16, 40, 0))
+            banner.grid(row=0, column=0, sticky="ew")
+            preview = ", ".join(self._discovered_from_disk[:5])
+            if len(self._discovered_from_disk) > 5:
+                preview += f", … (+{len(self._discovered_from_disk) - 5} more)"
+            ttb.Label(
+                banner,
+                text=f"ⓘ Imported {len(self._discovered_from_disk)} folder(s) from your library: {preview}",
+                bootstyle="info",  # type: ignore[call-arg]
+                font=("Segoe UI", 10, "italic"),
+                anchor="w",
+                wraplength=900,
+            ).pack(anchor="w", fill="x")
+
+        body = ttb.Frame(self.top, padding=(40, 24, 40, 16))
+        body.grid(row=1, column=0, sticky="nsew")
+        # Listbox column gets generous room for the longest category names.
+        body.columnconfigure(0, weight=3, uniform="cols", minsize=380)
+        body.columnconfigure(1, weight=4, uniform="cols")
+        body.rowconfigure(1, weight=1)
+
+        # Column headers
+        ttb.Label(body, text="Categories",
+                  font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttb.Label(body, text="Keywords (one per line)",
+                  font=("Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(16, 0), pady=(0, 6))
+
+        # Categories listbox + scrollbar — flat relief plus thick highlight gives
+        # a softer, more rounded-feeling frame than the default sharp tk border.
+        cats_frame = ttb.Frame(body)
+        cats_frame.grid(row=1, column=0, sticky="nsew")
+        cats_frame.columnconfigure(0, weight=1)
+        cats_frame.rowconfigure(0, weight=1)
+        self._listbox = tk.Listbox(
+            cats_frame, exportselection=False, height=14,
+            activestyle="dotbox",
+            bg=CLR_WHITE, fg=CLR_PURPLE,
+            selectbackground=CLR_PINK, selectforeground=CLR_WHITE,
+            relief="flat", borderwidth=0,
+            highlightthickness=2, highlightbackground=CLR_PEACH,
+            highlightcolor=CLR_PINK,
+            font=("Segoe UI", 10),
+        )
+        self._listbox.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         self._listbox.bind("<<ListboxSelect>>", lambda _e: self._on_select())
         sb = ttb.Scrollbar(cats_frame, orient="vertical", command=self._listbox.yview)
-        sb.pack(side="right", fill="y")
+        sb.grid(row=0, column=1, sticky="ns")
         self._listbox.config(yscrollcommand=sb.set)
 
-        kw_frame = ttb.LabelFrame(body, text="Keywords (one per line)", padding=8)
-        kw_frame.grid(row=0, column=1, sticky="nsew")
-
-        self._kw_text = tk.Text(kw_frame, width=36, height=14, wrap="none", undo=True)
-        self._kw_text.pack(side="left", fill="both", expand=True)
+        # Keyword editor
+        kw_frame = ttb.Frame(body)
+        kw_frame.grid(row=1, column=1, sticky="nsew", padx=(16, 0))
+        kw_frame.columnconfigure(0, weight=1)
+        kw_frame.rowconfigure(0, weight=1)
+        self._kw_text = tk.Text(
+            kw_frame, width=36, height=14, wrap="none", undo=True,
+            bg=CLR_WHITE, fg=CLR_PURPLE,
+            insertbackground=CLR_PURPLE,
+            selectbackground=CLR_PINK, selectforeground=CLR_WHITE,
+            relief="flat", borderwidth=0,
+            highlightthickness=2, highlightbackground=CLR_PEACH,
+            highlightcolor=CLR_PINK,
+            font=("Segoe UI", 10),
+            padx=8, pady=8,
+        )
+        self._kw_text.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         kwsb = ttb.Scrollbar(kw_frame, orient="vertical", command=self._kw_text.yview)
-        kwsb.pack(side="right", fill="y")
+        kwsb.grid(row=0, column=1, sticky="ns")
         self._kw_text.config(yscrollcommand=kwsb.set)
         self._kw_text.bind("<FocusOut>", lambda _e: self._save_keywords_for_selection())
         self._kw_text.bind("<<Modified>>", self._on_text_modified)
 
-        body.columnconfigure(0, weight=0)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
+        # Action row beneath the lists — uses the same generous padding as the
+        # main window's action buttons so the dialog feels consistent.
+        actions = ttb.Frame(self.top, padding=(40, 4, 40, 12))
+        actions.grid(row=2, column=0, sticky="ew")
+        for i, (label, cmd) in enumerate([
+            ("Add",    self._on_add),
+            ("Rename", self._on_rename),
+            ("Delete", self._on_delete),
+            ("↑",      lambda: self._on_move(-1)),
+            ("↓",      lambda: self._on_move(1)),
+        ]):
+            ttb.Button(actions, text=label, bootstyle="secondary",  # type: ignore[call-arg]
+                       padding=(20, 10), command=cmd).grid(row=0, column=i, padx=6, sticky="w")
 
-        # Action row beneath the lists
-        actions = ttb.Frame(self.top, padding=(16, 0))
-        actions.pack(fill="x")
-        ttb.Button(actions, text="Add",    command=self._on_add).pack(side="left", padx=4)
-        ttb.Button(actions, text="Rename", command=self._on_rename).pack(side="left", padx=4)
-        ttb.Button(actions, text="Delete", command=self._on_delete).pack(side="left", padx=4)
-        ttb.Button(actions, text="↑",      command=lambda: self._on_move(-1)).pack(side="left", padx=4)
-        ttb.Button(actions, text="↓",      command=lambda: self._on_move(1)).pack(side="left", padx=4)
-
-        footer = ttb.Frame(self.top, padding=16)
-        footer.pack(fill="x")
-        ttb.Button(footer, text="Save",   bootstyle="primary",   # type: ignore[call-arg]
-                   command=self._on_save).pack(side="right", padx=4)
+        # Save / Cancel — match main window button padding for visual consistency.
+        # The dirty indicator sits on the left of the footer and only renders when
+        # the working copy has unsaved changes.
+        footer = ttb.Frame(self.top, padding=(40, 8, 40, 24))
+        footer.grid(row=3, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        self._dirty_label = ttb.Label(
+            footer, text="", bootstyle="warning",  # type: ignore[call-arg]
+            font=("Segoe UI", 10, "italic"), anchor="w",
+        )
+        self._dirty_label.grid(row=0, column=0, sticky="w")
         ttb.Button(footer, text="Cancel", bootstyle="secondary",  # type: ignore[call-arg]
-                   command=self._on_cancel).pack(side="right", padx=4)
+                   padding=(28, 12), command=self._on_cancel).grid(row=0, column=1, padx=6)
+        ttb.Button(footer, text="Save", bootstyle="primary",  # type: ignore[call-arg]
+                   padding=(28, 12), command=self._on_save).grid(row=0, column=2, padx=6)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -852,8 +958,9 @@ class CategoriesDialog:
     def _reload_listbox(self, select: str | None = None) -> None:
         """Repopulate the listbox from the working dict, restoring selection."""
         self._listbox.delete(0, tk.END)
+        pad = self._LB_PAD
         for name in self._working.keys():
-            self._listbox.insert(tk.END, name)
+            self._listbox.insert(tk.END, f"{pad}{name}{pad}")
         if select is not None and select in self._working:
             idx = list(self._working.keys()).index(select)
             self._listbox.selection_set(idx)
@@ -873,7 +980,7 @@ class CategoriesDialog:
             self._kw_text.edit_modified(False)
             self._suppress_keyword_save = False
             return
-        name = self._listbox.get(sel[0])
+        name = self._listbox.get(sel[0]).strip()
         self._selected = name
         self._suppress_keyword_save = True
         self._kw_text.delete("1.0", tk.END)
@@ -881,12 +988,46 @@ class CategoriesDialog:
         self._kw_text.edit_modified(False)
         self._suppress_keyword_save = False
 
+    def _sync_from_disk(self) -> None:
+        """Import library folders that aren't in the JSON yet.
+
+        Each newly-discovered folder is added to the working copy with an
+        empty keyword list AND to ``_original_names`` so that subsequent
+        renames or deletes via the dialog are tracked correctly and applied
+        to the on-disk folder at Save time.  The dialog is marked dirty so
+        the user is nudged to Save (which persists the additions to
+        ``categories.json``).
+        """
+        on_disk = discover_library_folders(self.library_root)
+        self._discovered_from_disk = [n for n in on_disk if n not in self._working]
+        for name in self._discovered_from_disk:
+            self._working[name] = []
+            # Treat disk-discovered categories as "original" so rename/delete
+            # tracking in _on_rename / _on_delete fires for them too.
+            if name not in self._original_names:
+                self._original_names.append(name)
+        if self._discovered_from_disk:
+            logger.info(
+                "CategoriesDialog: discovered %d folders on disk not in JSON: %s",
+                len(self._discovered_from_disk), self._discovered_from_disk,
+            )
+        # Note: dirty flag is set in __init__ after _build() so the indicator
+        # label exists.
+
+    def _mark_dirty(self) -> None:
+        """Flag the working copy as having unsaved changes and refresh the indicator."""
+        self._dirty = True
+        if hasattr(self, "_dirty_label"):
+            self._dirty_label.config(
+                text="● Unsaved changes — click Save to apply"
+            )
+
     def _on_text_modified(self, _event: object) -> None:
         """Mark the working copy dirty as the user types in the keyword editor."""
         if self._suppress_keyword_save:
             return
         if self._kw_text.edit_modified():
-            self._dirty = True
+            self._mark_dirty()
 
     def _save_keywords_for_selection(self) -> None:
         """Persist the keyword editor's contents to the working dict."""
@@ -896,7 +1037,7 @@ class CategoriesDialog:
         keywords = [line.strip() for line in raw.splitlines() if line.strip()]
         if self._working.get(self._selected) != keywords:
             self._working[self._selected] = keywords
-            self._dirty = True
+            self._mark_dirty()
         self._kw_text.edit_modified(False)
 
     # ------------------------------------------------------------------
@@ -914,7 +1055,7 @@ class CategoriesDialog:
             messagebox.showerror("Add Category", f"Invalid or duplicate name: {name!r}", parent=self.top)
             return
         self._working[name] = []
-        self._dirty = True
+        self._mark_dirty()
         self._reload_listbox(select=name)
         self._on_select()
 
@@ -948,7 +1089,7 @@ class CategoriesDialog:
         else:
             if old in self._original_names:
                 self._renamed[old] = new
-        self._dirty = True
+        self._mark_dirty()
         self._reload_listbox(select=new)
         self._on_select()
 
@@ -973,7 +1114,7 @@ class CategoriesDialog:
             if target in self._original_names:
                 self._deleted.add(target)
         self._working.pop(target, None)
-        self._dirty = True
+        self._mark_dirty()
         self._reload_listbox()
         self._on_select()
 
@@ -991,7 +1132,7 @@ class CategoriesDialog:
             return
         names[idx], names[new_idx] = names[new_idx], names[idx]
         self._working = {n: self._working[n] for n in names}
-        self._dirty = True
+        self._mark_dirty()
         self._reload_listbox(select=self._selected)
 
     # ------------------------------------------------------------------
@@ -1001,18 +1142,28 @@ class CategoriesDialog:
     def _on_save(self) -> None:
         """Apply renames + deletions on disk, then write ``categories.json``."""
         self._save_keywords_for_selection()
+        logger.info(
+            "CategoriesDialog save: library_root=%s, renames=%s, deletes=%s",
+            self.library_root, self._renamed, self._deleted,
+        )
 
         # Apply on-disk renames first (failure here aborts before any deletes).
         for orig, new in self._renamed.items():
+            src = self.library_root / orig
+            dst = self.library_root / new
+            logger.info("CategoriesDialog: rename %s -> %s (src exists: %s)",
+                        src, dst, src.exists())
             try:
                 rename_category_folder(self.library_root, orig, new)
-            except FileExistsError as exc:
+            except FileExistsError:
                 merge = messagebox.askyesno(
                     "Rename clash",
                     f"Library already has a folder named {new!r}.\n\nMerge contents from {orig!r} into it?",
                     parent=self.top,
                 )
                 if not merge:
+                    logger.warning("CategoriesDialog: user declined merge for %s -> %s; aborting save",
+                                   orig, new)
                     messagebox.showinfo(
                         "Save aborted",
                         f"Rename of {orig!r} -> {new!r} skipped; resolve manually and Save again.",
@@ -1020,18 +1171,25 @@ class CategoriesDialog:
                     )
                     return
                 self._merge_category_folders(orig, new)
+                logger.info("CategoriesDialog: merged %s into %s", orig, new)
             except OSError as exc:
+                logger.error("CategoriesDialog: rename failed %s -> %s: %s", orig, new, exc)
                 messagebox.showerror(
                     "Rename failed",
                     f"Could not rename {orig!r} -> {new!r}: {exc}",
                     parent=self.top,
                 )
                 return
+            else:
+                logger.info("CategoriesDialog: renamed %s -> %s", orig, new)
 
         for name in self._deleted:
+            logger.info("CategoriesDialog: deleting category %s (moving children to Uncategorized)", name)
             move_category_to_uncategorized(self.library_root, name)
 
         save_categories_dict(self._working, self.categories_path)
+        logger.info("CategoriesDialog: wrote %d categories to %s",
+                    len(self._working), self.categories_path)
         self._saved = True
         self.top.grab_release()
         self.top.destroy()

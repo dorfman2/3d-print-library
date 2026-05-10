@@ -73,7 +73,7 @@ Config is saved alongside the executable: app preferences in
 
 ---
 
-## Installer (1.1.0)
+## Installer (1.1.1)
 
 A pre-built installer ships at `dist\3DPrintSync-Setup.exe`:
 

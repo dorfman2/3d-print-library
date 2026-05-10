@@ -44,9 +44,11 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "calibration", "calibrate", "benchy", "benchmark",
         "stringing", "overhang", "retraction", "ironing", "tolerance",
         "first layer", "flow rate", "temp tower", "temperature tower",
+        "input shaping",
     ],
     "1 - Machines": [
         "ender", "prusa", "bambu", "creality", "voron", "ratrig",
+        "anycubic", "elegoo", "drawbot",
         "extruder", "hotend", "hot end", "fan duct", "bowden",
         "filament", "nozzle", "heatbreak", "heat break", "bed level",
         "klipper", "marlin", "x1c", "p1s", "a1 mini", "core one",
@@ -57,9 +59,11 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "curtain", "shelf", "door", "toilet", "soap", "toothbrush",
         "towel", "cabinet", "drawer", "furniture",
         "musubi", "sushi", "press", "food", "bento",
+        "air purifier", "bag clip", "chopstick", "clothespin",
+        "boot dryer", "card game",
     ],
     "3 - Office": [
-        "desk", "monitor", "keyboard", "phone stand", "cable",
+        "desk", "monitor", "keyboard", "phone stand", "phone holder", "cable",
         "webcam", "speaker", "headphone", "headset", "pen holder",
         "office", "laptop", "tablet", "mousepad",
     ],
@@ -67,10 +71,14 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "tool", "wrench", "screwdriver", "storage", "bin",
         "organizer", "pegboard", "peg board", "workshop", "drill",
         "clamp", "jig", "fixture", "workbench", "tray", "sorter",
+        "gridfinity", "stencil", "scanner", "fume extractor", "vise",
+        "cookie cutter", "french cleat", "picture frame", "espresso",
+        "tape maker",
     ],
     "5 - Repairs and Replacements": [
         "repair", "replacement", "replace", "spare part",
         "bracket", "clip", "snap", "latch",
+        "end cap", "endcap", "battery", "phone case",
     ],
     "6 - Electronics": [
         "raspberry pi", "arduino", "esp32", "esp8266",
@@ -81,28 +89,31 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
     "7 - Gifts and Toys": [
         "gift", "toy", "fidget", "novelty",
-        "kids", "children", "spinner", "puzzle",
+        "kids", "children", "spinner", "puzzle", "holiday",
     ],
     "8 - Models and Display": [
         "model", "display", "sculpture", "bust", "figurine",
         "decorative", "statue", "diorama",
+        "book nook", "lithophane",
     ],
     "9 - Tabletop": [
         "tabletop", "dungeon", "terrain", "dnd", "d&d", "warhammer",
         "40k", "pathfinder", "rpg", "scenery", "tiles", "scatter",
+        "minis", "catan", "tankard",
     ],
     "10 - RC Flight": [
         "drone", "quadcopter", "fpv", "rc car", "rc truck",
-        "remote control", "traxxas", "losi", "arrma",
+        "remote control", "traxxas", "losi", "arrma", "eclipson",
     ],
     "11 - MultiBoard": [
         "multiboard", "multi-board", "multi board",
     ],
     "12 - MMU": [
         "mmu", "multi material", "multimaterial", "ams", "purge tower",
+        "hueforge", "multicolor",
     ],
     "13 - NERF": [
-        "nerf", "blaster", "dart",
+        "nerf", "blaster", "dart", "rapidstrike", "stryfe",
     ],
     "14 - Legos": [
         "lego", "legos", "moc", "technic", "duplo",
@@ -216,7 +227,12 @@ def categorize(name: str, categories: dict[str, list[str]] | None = None) -> str
     normalized = name.lower().replace("_", " ").replace("-", " ")
     scores: dict[str, int] = {}
     for category, keywords in cats.items():
-        score = sum(1 for kw in keywords if kw in normalized)
+        # Length-weighted scoring: long specific keywords (e.g. "multiboard")
+        # outweigh short generic ones (e.g. "hook"), so a name like
+        # "Multiboard Scraper Hook" is decided by the most specific match.
+        # This also blunts substring false-positives ("clip" inside "eclipson")
+        # because the longer real keyword scores higher.
+        score = sum(len(kw) for kw in keywords if kw in normalized)
         if score > 0:
             scores[category] = score
     if not scores:
