@@ -179,3 +179,21 @@ def test_discover_library_folders_ignores_files(library_root: Path) -> None:
 
 def test_discover_library_folders_handles_missing_root(tmp_path: Path) -> None:
     assert sda.discover_library_folders(tmp_path / "nope") == []
+
+
+def test_discover_library_folders_ignores_dotfolders(library_root: Path) -> None:
+    """Dotfolders like .kiro must never appear as discovered categories."""
+    (library_root / ".kiro" / "steering").mkdir(parents=True)
+    (library_root / ".git").mkdir()
+    (library_root / "1 - Machines").mkdir()
+    assert sda.discover_library_folders(library_root) == ["1 - Machines"]
+
+
+def test_build_library_index_skips_dotfolders(tmp_path: Path) -> None:
+    """The library index must not descend into dotfolders."""
+    lib = tmp_path / "library"
+    (lib / ".kiro" / "steering").mkdir(parents=True)
+    (lib / "0 - Calibration" / "Benchy").mkdir(parents=True)
+    index = sd.build_library_index(lib)
+    assert "Benchy" in index
+    assert "steering" not in index
