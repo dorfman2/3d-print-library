@@ -471,7 +471,7 @@ def build_library_index(library: Path) -> set[str]:
     if not library.exists():
         return index
     for category in library.iterdir():
-        if not category.is_dir():
+        if not category.is_dir() or category.name.startswith("."):
             continue
         for project in category.iterdir():
             if project.is_dir():

@@ -256,7 +256,9 @@ def discover_library_folders(library_root: Path) -> list[str]:
         return []
     return sorted(
         child.name for child in library_root.iterdir()
-        if child.is_dir() and child.name != "Uncategorized"
+        if child.is_dir()
+        and not child.name.startswith(".")
+        and child.name != "Uncategorized"
     )
 
 
