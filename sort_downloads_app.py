@@ -18,7 +18,6 @@ Icon credit:
     from it (white-background composited, multi-size).
 """
 
-import ctypes
 import json
 import logging
 import os
@@ -27,7 +26,6 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-import winreg
 
 import ttkbootstrap as ttb
 from datetime import datetime, timedelta
@@ -39,7 +37,11 @@ from typing import Any
 import pystray
 from PIL import Image, ImageDraw, ImageTk
 
+from platform_support import get_platform
+
 logger = logging.getLogger(__name__)
+
+_platform = get_platform()
 
 # When frozen by PyInstaller: writable files (config, log) go to the install dir
 # alongside the .exe; read-only bundled assets come from _MEIPASS.
@@ -57,8 +59,7 @@ LOG_PATH: Path = _APP_DIR / "sort_downloads.log"
 CATEGORIES_PATH: Path = _APP_DIR / "categories.json"
 CATEGORIES_DEFAULT: Path = _ASSETS_DIR / "categories.default.json"
 ICON_SRC: Path = _ASSETS_DIR / "app-icon-100.png"
-AUTOSTART_KEY: str = "3DPrintSync"
-AUTOSTART_REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
+APP_NAME: str = "3DPrintSync"
 
 # Colour palette
 CLR_BG: str = "#FFF1D3"
@@ -129,6 +130,50 @@ def _setup_logging() -> None:
     root.addHandler(sh)
 
 
+import re
+
+_WINDOWS_PATH_RE = re.compile(r"^[A-Za-z]:\\")
+
+
+def _validate_config_paths(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Detect and reset cross-platform paths in an existing config.
+
+    If the config was synced from Windows (paths like ``C:\\...``) and loaded on
+    macOS, or vice versa, reset affected paths to platform defaults.
+
+    Args:
+        cfg: Config dict after JSON parsing and default-merge.
+
+    Returns:
+        The same dict with cross-platform paths replaced by platform defaults.
+    """
+    for key in ("source_dir", "dest_dir"):
+        path_val = cfg.get(key, "")
+        if sys.platform == "darwin" and _WINDOWS_PATH_RE.match(path_val):
+            logger.warning(
+                "Config %s contains Windows path '%s' on macOS — resetting to default",
+                key,
+                path_val,
+            )
+            cfg[key] = str(
+                _platform.default_source_path()
+                if key == "source_dir"
+                else _platform.default_library_path()
+            )
+        elif sys.platform == "win32" and path_val.startswith("/"):
+            logger.warning(
+                "Config %s contains POSIX path '%s' on Windows — resetting to default",
+                key,
+                path_val,
+            )
+            cfg[key] = str(
+                _platform.default_source_path()
+                if key == "source_dir"
+                else _platform.default_library_path()
+            )
+    return cfg
+
+
 def load_config() -> dict[str, Any]:
     """Load config from JSON file, creating it with defaults if absent.
 
@@ -142,7 +187,7 @@ def load_config() -> dict[str, Any]:
             # Fill in any missing keys
             for key, val in DEFAULT_CONFIG.items():
                 data.setdefault(key, val)
-            return data
+            return _validate_config_paths(data)
         except (json.JSONDecodeError, OSError):
             pass
     cfg = dict(DEFAULT_CONFIG)
@@ -357,6 +402,7 @@ class SyncApp:
             self.root.iconphoto(True, self._window_icon)  # type: ignore[arg-type]
         self.root.withdraw()
 
+        self._font_family = self._resolve_font()
         self._build_window()
         self._refresh_labels()  # populate labels from persisted state
         self._build_tray()
@@ -369,6 +415,40 @@ class SyncApp:
     # Window
     # ------------------------------------------------------------------
 
+    def _resolve_font(self) -> str:
+        """Resolve the platform font family after Tk root is created.
+
+        Resolves ``TkDefaultFont`` to its actual family on macOS. Applies
+        cross-platform safety checks and validates font availability.
+
+        Returns:
+            A validated font family string suitable for Tk widgets.
+        """
+        import tkinter.font as tkFont
+
+        font_family = _platform.platform_font()
+
+        # Resolve "TkDefaultFont" to actual family on macOS
+        if font_family == "TkDefaultFont":
+            font_family = tkFont.nametofont("TkDefaultFont").actual("family")
+
+        # Cross-platform safety check
+        if sys.platform == "darwin" and font_family == "Segoe UI":
+            font_family = "Arial"
+        elif sys.platform == "win32" and font_family in (
+            "San Francisco",
+            ".AppleSystemUIFont",
+        ):
+            font_family = "Arial"
+
+        # Validate availability
+        available = tkFont.families()
+        if font_family not in available:
+            font_family = "Arial"
+
+        logger.info("Using font: %s 10pt", font_family)
+        return font_family
+
     def _build_window(self) -> None:
         """Construct the control window using ttkbootstrap themed widgets."""
         # ── header banner (plain tk for guaranteed palette colours) ──────────
@@ -377,7 +457,7 @@ class SyncApp:
         tk.Label(
             header, text="3D Print Library Sync",
             bg=CLR_PURPLE, fg=CLR_WHITE,
-            font=("Segoe UI", 14, "bold"), pady=40,
+            font=(self._font_family, 14, "bold"), pady=40,
         ).pack()
 
         # ── body ─────────────────────────────────────────────────────────────
@@ -525,7 +605,14 @@ class SyncApp:
     # ------------------------------------------------------------------
 
     def _build_tray(self) -> None:
-        """Create and start the pystray icon in a daemon background thread."""
+        """Create and start the pystray icon.
+
+        On macOS, pystray's darwin backend requires the status item to be
+        created on the main thread. We use pystray's ``setup`` callback to
+        integrate with the tkinter event loop — the callback starts polling
+        tkinter from the pystray thread on Windows, or we run pystray
+        in detached mode on macOS.
+        """
         menu = pystray.Menu(
             pystray.MenuItem("Show Window", self._on_tray_show, default=True),
             pystray.MenuItem("Run Now", self._on_tray_run_now),
@@ -533,13 +620,18 @@ class SyncApp:
             pystray.MenuItem("Exit", self._on_tray_exit),
         )
         self._tray = pystray.Icon(
-            AUTOSTART_KEY,
+            APP_NAME,
             _make_icon_image(False),
             "3D Print Sync",
             menu,
         )
-        t = threading.Thread(target=self._tray.run, daemon=True)
-        t.start()
+        if sys.platform == "darwin":
+            # On macOS, run pystray in non-blocking (detached) mode.
+            # This avoids the NSStatusItem-on-background-thread crash.
+            self._tray.run_detached()
+        else:
+            t = threading.Thread(target=self._tray.run, daemon=True)
+            t.start()
 
     def _update_tray_icon(self) -> None:
         """Redraw the tray icon to reflect current running state."""
@@ -698,11 +790,24 @@ class SyncApp:
         save_config(self._config)
 
     def _on_autostart_toggle(self) -> None:
-        """Write or remove the Windows Registry autostart entry."""
+        """Write or remove the platform autostart entry."""
         enabled = bool(self._autostart_var.get())
         self._config["autostart"] = enabled
         save_config(self._config)
-        toggle_autostart(enabled)
+        _platform.toggle_autostart(enabled, sys.executable)
+        # Show one-time macOS Sequoia Login Items message
+        if (
+            enabled
+            and sys.platform == "darwin"
+            and not self._config.get("_sequoia_msg_shown")
+        ):
+            self._config["_sequoia_msg_shown"] = True
+            save_config(self._config)
+            messagebox.showinfo(
+                "Login Items",
+                "On macOS 15+ (Sequoia), you may need to approve this app in\n"
+                "System Settings → General → Login Items.",
+            )
 
     def _on_run_now(self) -> None:
         """Button: run a single sync immediately in a background thread."""
@@ -721,11 +826,12 @@ class SyncApp:
 
     def _on_open_logs(self) -> None:
         """Button: open the log file in the default text editor."""
-        import os
-        if LOG_PATH.exists():
-            os.startfile(str(LOG_PATH))
-        else:
-            logger.info("Log file does not exist yet: %s", LOG_PATH)
+        if not LOG_PATH.exists():
+            messagebox.showwarning("Log File", "Log file has not been created yet.")
+            return
+        if not _platform.open_file_in_editor(LOG_PATH):
+            logger.warning("Could not open log file: %s", LOG_PATH)
+            messagebox.showwarning("Log File", "Could not open the log file.")
 
     # ------------------------------------------------------------------
     # Exit
@@ -1216,50 +1322,12 @@ class CategoriesDialog:
 
 
 # ---------------------------------------------------------------------------
-# Registry helpers
-# ---------------------------------------------------------------------------
-
-def toggle_autostart(enabled: bool) -> None:
-    """Write or remove the autostart registry entry for this app.
-
-    Uses ``pythonw.exe`` so no console window appears on login.
-
-    Args:
-        enabled: When True, write the registry value; when False, remove it.
-    """
-    pythonw = sys.executable.replace("python.exe", "pythonw.exe")
-    value = f'"{pythonw}" "{SCRIPT_PATH}" --minimized'
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            AUTOSTART_REG_PATH,
-            0,
-            winreg.KEY_SET_VALUE,
-        )
-        with key:
-            if enabled:
-                winreg.SetValueEx(key, AUTOSTART_KEY, 0, winreg.REG_SZ, value)
-            else:
-                try:
-                    winreg.DeleteValue(key, AUTOSTART_KEY)
-                except FileNotFoundError:
-                    pass
-    except OSError as exc:
-        logger.error("Registry operation failed: %s", exc)
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Named mutex prevents a second instance from launching.
-    # The handle must stay alive for the lifetime of the process.
-    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\3DPrintSync")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        ctypes.windll.user32.MessageBoxW(
-            0, "3D Print Sync is already running.", "Already Running", 0x40
-        )
+    if not _platform.acquire_instance_lock():
+        messagebox.showinfo("Already Running", "3D Print Sync is already running.")
         sys.exit(0)
 
     app = SyncApp()

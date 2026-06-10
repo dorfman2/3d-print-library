@@ -28,8 +28,19 @@ from typing import NamedTuple
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR: Path = Path(__file__).parent
-DOWNLOADS: Path = Path(r"C:\Users\dorfm\Downloads")
-LIBRARY_ROOT: Path = Path(r"G:\3-D Printing\1 - Objects")
+try:
+    _home = Path.home()
+    if not _home.exists():
+        raise OSError("Home directory does not exist")
+    DOWNLOADS: Path = _home / "Downloads"
+    LIBRARY_ROOT: Path = _home / "3D Prints"
+except (RuntimeError, OSError) as _exc:
+    logger.warning("Path.home() unavailable (%s), using fallback paths", _exc)
+    DOWNLOADS = Path("/tmp/Downloads")
+    LIBRARY_ROOT = Path("/tmp/3DPrintSync")
+
+if not DOWNLOADS.exists():
+    logger.warning("Default source path does not exist: %s", DOWNLOADS)
 LOG_PATH: Path = SCRIPT_DIR / "sort_downloads.log"
 
 PRINT_EXTENSIONS: frozenset[str] = frozenset({

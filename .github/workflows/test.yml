@@ -8,7 +8,10 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -16,6 +19,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Install tkinter (macOS)
+        if: runner.os == 'macOS'
+        run: brew install python-tk@3.12
 
       - name: Install dependencies
         run: |

@@ -2,3 +2,6 @@ ttkbootstrap>=1.10.1
 pystray>=0.19.5
 Pillow>=10.0.0
 pyinstaller>=6.0.0
+# pyobjc-framework-Quartz is pulled transitively by pystray on macOS.
+# Explicit pin ensures correct version for menu bar icon support.
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
