@@ -4,7 +4,7 @@
 
 [Setup]
 AppName=3D Print Sync
-AppVersion=1.1.2
+AppVersion=1.2.0
 AppPublisher=dorfmandesign
 AppPublisherURL=https://github.com/dorfman2/3d-print-library
 DefaultDirName={localappdata}\3DPrintSync
