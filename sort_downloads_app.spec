@@ -28,7 +28,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["rthook_isolate_python.py"],
     excludes=[],
     noarchive=False,
     collect_submodules=["ttkbootstrap"],
